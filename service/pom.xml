@@ -94,6 +94,25 @@
             <scope>test</scope>
         </dependency>
         <dependency>
+            <!-- THE CLIENT, UNDER TEST AGAINST THE REAL SURFACE — and test scope is the whole
+                 arrangement. The wire is the contract between two jars that never see each other:
+                 `client` cannot depend on `service` (it would drag the deployable into every
+                 consumer) and `service` must not depend on `client` at runtime (it serves the
+                 routes, it does not call them). So the only place the two halves can be put in one
+                 JVM is this module's TEST classpath, and ContainersClientWireTest is what makes
+                 "the client speaks what the service serves" a measured claim rather than two files
+                 that were written to agree.
+
+                 What it proves that the client's own suite cannot: the paths hit real routes, the
+                 status codes are the resource's own, SPEC_CONFLICT arrives from the real mapper,
+                 and the bearer passes the real OwnerGuard through real quarkus-oidc validation. Its
+                 own suite proves the converse — the answers a real service will not produce on
+                 demand — against a stub. -->
+            <groupId>${project.groupId}</groupId>
+            <artifactId>qits-containers-client</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
             <groupId>io.rest-assured</groupId>
             <artifactId>rest-assured</artifactId>
             <scope>test</scope>

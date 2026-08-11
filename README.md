@@ -17,7 +17,7 @@ restart adopts what is still running, and no code path removes a container that 
 | Module | What |
 |---|---|
 | `core/` | The domain: the registry rows, the workload spec and its lifecycle policies, the docker seam. A library jar. It owns the datasource, the persistence unit and the Flyway lineage. |
-| `client/` | What a consumer depends on to **call** this service: the wire records and the HttpClient behind them. It depends on `core` **not at all**. |
+| `client/` | What a consumer depends on to **call** this service: the wire records, the four-outcome answer and the HttpClient behind them. It depends on `core` **not at all**. |
 | `service/` | The deployable: the REST surface under `/containers/api`, the real docker driver (`dockerhost/`), the machine guard, the boot steps. |
 
 The directories are short and the artifactIds are namespaced (`qits-containers-*`): generic
@@ -99,9 +99,87 @@ keeps two environments sharing one docker daemon out of each other's rows. Until
 gate `qits.auth.machine.required` is on — it ships off, as it does everywhere — the path owner is
 trusted and no bearer is needed.
 
+## The client
+
+`client/` is what a consumer depends on to call all of the above. One class, four answers, no
+framework:
+
+    ContainersClient client = new ContainersClient(url, requestTimeout, ensureTimeout, tokens);
+
+    switch (client.ensure(owner, workload, ref, EnsureRequest.of(spec, policy))) {
+      case Created(var place) -> …   // 201, the place is new
+      case Ready(var place)   -> …   // 200, it was already there
+      case Refused(int s, String code, String m) -> …   // it said no
+      case Unreachable(String cause)            -> …   // nothing answered
+    }
+
+**`REFUSED` and `UNREACHABLE` are never one thing.** A refusal is evidence about the request; an
+unreachable service is evidence about nothing at all. A caller that read the second as the first
+would conclude its workload was never started and start a second one — which is the failure this
+whole service exists to remove, arriving through its own client. There is deliberately no
+`retryable()`: two of the four warrant another attempt and they warrant differently-shaped ones.
+
+`ensure` gets its own deadline because it may be pulling an image; everything else shares one, and
+every method takes a `Duration` of the caller's. The client never throws.
+
+### Wiring it up
+
+The defaults ship in the jar at ordinal 100 — `qits.containers.url`,
+`qits.containers.client.request-timeout`, `qits.containers.client.ensure-timeout` — so a consumer's
+producer names keys rather than values:
+
+```java
+@ApplicationScoped
+class ContainersClientProducer {
+  @ConfigProperty(name = "qits.containers.url") String url;
+  @ConfigProperty(name = "qits.containers.client.request-timeout") Duration request;
+  @ConfigProperty(name = "qits.containers.client.ensure-timeout") Duration ensure;
+  @Inject MachineTokens tokens;   // the consumer's own; TokenSource.none() until the gate is on
+
+  @Produces @Singleton
+  ContainersClient client() {
+    return new ContainersClient(url, request, ensure, () -> tokens.forAudience("qits-containers"));
+  }
+}
+```
+
+**The producer is the consumer's job and the jar brings no container to do it.** That is what keeps
+`quarkus-arc` and every OIDC extension out of this jar, and it is what lets a daemon with no CDI
+construct one with `new`. `TokenSource` is asked per request, so a consumer's own caching decides
+when a token is stale; empty is the shipped posture, because the service's gate ships off.
+
+### What a native consumer registers
+
+`ContainersJson` builds its **own** `ObjectMapper`, for the reason `CanonicalJson` does — a
+consuming application's `ObjectMapperCustomizer`s must not reach what this client puts on a wire —
+and that mapper is invisible to the build step that scans for what needs reflecting on. So a
+deployable that native-image-compiles owes the wire records a registration, exactly as it owes
+qits-eventstream one (`EventWireReflection` is the worked example, and what it cost when it was
+missing is in its javadoc: a green build, a failure on every call, one WARN).
+
+The list is closed and every entry is nested in one class, so it is a paste rather than a
+derivation:
+
+```java
+@RegisterForReflection(targets = {
+    ContainersWire.EnsureRequest.class, ContainersWire.Spec.class, ContainersWire.Policy.class,
+    ContainersWire.Security.class, ContainersWire.VolumeMount.class, ContainersWire.SharedMount.class,
+    ContainersWire.Recreate.class, ContainersWire.PolicyType.class, ContainersWire.PullPolicy.class,
+    ContainersWire.Envelope.class, ContainersWire.State.class, ContainersWire.Endpoint.class,
+    ContainersWire.Listing.class, ContainersWire.LogTail.class, ContainersWire.DeleteOutcome.class,
+    ContainersWire.Destroyed.class, ContainersWire.DestroyAllOutcome.class,
+    ContainersWire.VolumeEnvelope.class, ContainersWire.ErrorBody.class,
+    ContainersWire.Desired.class, ContainersWire.Observed.class, ContainersWire.VolumeState.class})
+public final class ContainersWireReflection {}
+```
+
+Both directions are on it, and a record this consumer only *sends* is as dependent on it as one it
+reads: the failure is on the writing side too, where an unregistered record has no components to
+find. A JVM test cannot catch a missing entry — on a JVM these types reflect whether anyone
+registered them or not — which is why the list is written down here rather than discovered.
+
 ## What is deliberately *not* here yet
 
-- **The client.** The module exists so the boundary is stated before there is code to bend it.
 - **The data plane.** The reverse tunnels two other modules carry today centralize here eventually.
 - **The consumers.** qits-ci, qits-workspaces and qits-projects still run their own containers; the
   point of this service is that they stop, one at a time.

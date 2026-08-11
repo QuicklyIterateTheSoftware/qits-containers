@@ -126,7 +126,53 @@ ship a stamp that writes nothing.
 `@DefaultBean` `java.time.Clock` for the whole platform, and a second default producer of the same
 type fails the build with an ambiguous resolution — measured 2026-08-11. `java.time.Clock` is a JDK
 type, so nothing in `core` imports an eventstream class for it.
-- **`client` must not gain a dependency on `core`.** See README's Layout.
+- **`client` must not gain a dependency on `core`.** See README's Layout, and the client section
+  below.
 - `DatasourceBaselineTest` and `ArchRulesTest` are the platform's shared rules, test scope from
   `qits-arch-rules`. They fail this build for a datasource missing a line of the three-line
   resilience block, and for an entity that neither implements `CausedRow` nor declares `@Uncaused`.
+
+## The client module, and its three rules
+
+**1. No `core`, no `service`, and no framework.** The first two are the module split; the third is
+what makes the first two survivable. `ContainersClient` is a plain class with a constructor —
+nothing annotated, nothing injected — so the jar's whole dependency list is `jackson-databind` and
+`qits-eventstream`. A `quarkus-arc` here would put a CDI container into a consumer that deliberately
+runs none, and an OIDC extension would put a second answer to "who is calling" beside qits-idp's.
+The consumer writes a three-line producer; the README has it.
+
+The one dependency that is not obviously free is **qits-eventstream, and it is taken on purpose**.
+The client stamps `X-Qits-Causation-Id` by hand, which is what `CausationHeader`'s own javadoc
+prescribes for a caller speaking `java.net.http.HttpClient` — `CausationClientFilter` is a JAX-RS
+provider and there is no JAX-RS here to discover it. Copying the header name into this jar would be
+a second answer to a settled question that stops matching the day the name moves; declaring the jar
+`provided` would make it a line every consumer must restate and a `NoClassDefFoundError` for the one
+that forgets. Compile scope, the same reasoning qits-eventstream's own pom gives for taking
+qits-db-core at runtime scope rather than optional.
+
+**2. The wire is the contract, and both sides restate it.** `client/ContainersWire` mirrors
+`service/api/ContainersWire`; neither jar sees the other and neither may be made to. That is what
+lets a consumer be built and released without this repository, and it is why the client's records
+**validate nothing** — the belts are `ContainersIdentifiers`', on the far side, where a refusal can
+name the field and come back as a 400. Two sets of rules would drift the first time the service's
+widened.
+
+The client is **forward compatible in the direction the platform deploys in**: unknown JSON fields
+are ignored and an unknown enum constant reads as null (`ContainersJson`, which says what that
+costs). The service ships first; a client that refused a body it did not fully recognise would
+break every consumer on the day the service was deployed.
+
+**3. Four answers, and the last two never merge.** `ContainersAnswer` is a sealed interface —
+`Created`, `Ready`, `Refused`, `Unreachable` — and it carries **no `retryable()`**, for the reason
+`EventsPublisher.Delivery` carries none. A 2xx whose body will not bind is a `Refused` with
+`UNREADABLE` on it and never an `Unreachable`: something answered, so the evidence is about the
+response. Nothing throws; a throw would be a fifth answer with no place in the four, arriving on the
+caller's own worker thread.
+
+**Where the client's tests live is decided by what they can see.** The client module's suite is
+pure unit tests against a JDK `HttpServer` stub — outcome mapping, URL building, header stamping,
+the HTTP/1.1 pin — with no application, no database and no docker. The pairing with the real routes
+is `service`'s `ContainersClientWireTest`, because test scope on the deployable is the only
+classpath both jars may share. **The HTTP/1.1 pin is asserted on the client's configuration, not on
+a response**: `HttpResponse.version()` reports what the two ends negotiated, and every server this
+client meets speaks HTTP/1.1, so that assertion would pass with the `version(...)` line deleted.
