@@ -1,0 +1,126 @@
+# The release pipeline: this repository reacts to its OWN release and publishes under the released
+# VERSION. qits-githost's and qits-platform-dns' file in shape — see those repositories for the long
+# form of each rule; the short form of the five that bite:
+#
+# - The selection naming this repository is not a loop: SCMRelease comes from qits-workspaces, and
+#   nothing in this file publishes it.
+# - `artifacts:` is a declaration, not a report — qits-ci announces one SoftwareRelease per entry on
+#   the strength of it, and cannot see what a step pushed. It declares what THIS script pushes, and
+#   here that is THREE things: the two library jars and the image. Keep it true.
+# - The names are unqualified on purpose; the reader supplies its own registry host.
+# - The image build below is ci-post-receive.yml's, and the two must stay matched: one image
+#   content, two coordinates. That includes --network and --build-arg, which this repository needs
+#   because its four platform jars live only in the platform's own Maven repository.
+# - This file is inert until an SCMRelease for this repository exists, and it lands first on purpose
+#   — the bus is at-most-once, so the trigger must precede the event it selects.
+#
+# THE PLATFORM'S FIRST DUAL MAVEN + DOCKER RELEASE, and that is why it declares three artifacts
+# where every sibling declares one kind. qits-githost's file says the inverse of this repository's
+# situation out loud — it publishes library jars too, does NOT push them from its release pipeline,
+# and therefore does not declare them. Here the pipeline really does push both jars, so both are
+# declared. `qits-containers-service` is NOT declared and must not be: the deployable is shipped as
+# the image, and nothing uploads its jar.
+event: SCMRelease
+when:
+  - repository: { exact: qits-containers }
+artifacts:
+  - { type: maven, name: "eu.wohlben.qits:qits-containers-core" }
+  - { type: maven, name: "eu.wohlben.qits:qits-containers-client" }
+  - { type: docker, name: qits/qits-containers }
+steps:
+    # --- step 1: the jars -------------------------------------------------------------------------
+    # maven-base rather than ci-base, and that is the whole reason this release is two steps rather
+    # than one. A `deploy` needs a JDK and ci-base is `docker:cli` plus bash/curl/git/jq — no java
+    # anywhere — while maven-base carries no docker CLI. No build image has both, so the two halves
+    # take the two images, exactly as ci-post-receive.yml does. Each step is its own container with
+    # its own clone, so each does its own version read and its own tag checkout.
+  - image: qits/build-images/maven-base:latest
+    timeout-seconds: 1800
+    script: |
+      # Without -e a failed deploy is swallowed and a green release run makes qits-ci announce jars
+      # that were never pushed. -u makes an unset registry variable stop the step.
+      set -eu
+
+      # The event, read as data: the payload reaches the container verbatim in $QITS_EVENT_PAYLOAD.
+      # jq rather than `node -p`, because this image has jq and no node — the form
+      # qits-eventstream's and qits-integrations-quarkus' release pipelines use on the same image.
+      # `-e` makes a missing .version a non-zero exit rather than the string "null".
+      version=$(printf '%s' "$QITS_EVENT_PAYLOAD" | jq -er .version)
+      # A version here is a calver or a semver, and nothing legitimate needs a character outside
+      # this set. Refused rather than quoted, because it reaches a shell, a URL and a Maven
+      # coordinate.
+      case "$version" in
+        ''|*[!0-9A-Za-z._+-]*) echo "refusing an implausible version: $version" >&2; exit 1 ;;
+      esac
+      echo "releasing eu.wohlben.qits:qits-containers-{core,client}:$version"
+
+      # The tag is the checkout target: an event-triggered run is cloned at the head of main, which
+      # a later push moves — the tag does not. The clone is shallow and carries no tags, hence the
+      # explicit refspec; the URL rather than `origin` because every address a step needs arrives as
+      # environment. `checkout --detach` peels the annotated tag to its commit.
+      git fetch "$QITS_CI_REPOSITORY_URL" "refs/tags/$version:refs/tags/$version"
+      git checkout --detach "$version"
+
+      # Skip only when BOTH modules are published: `deploy` runs across one reactor and ships them
+      # together, so one missing module means the whole run must go again. AND-chained for exactly
+      # that reason — an `||` here would skip on a half-published version and leave it half-published
+      # forever. The root pom is not probed: it can only be absent if this run never got as far as
+      # either module, which the two probes already say.
+      if curl -fsS -o /dev/null "$QITS_MAVEN_REGISTRY_URL/eu/wohlben/qits/qits-containers-core/$version/qits-containers-core-$version.pom" \
+        && curl -fsS -o /dev/null "$QITS_MAVEN_REGISTRY_URL/eu/wohlben/qits/qits-containers-client/$version/qits-containers-client-$version.pom"; then
+        echo "both modules @$version are already published — skipping"
+        exit 0
+      fi
+
+      # The four platform jars resolve from the platform registry. The pom's default names
+      # localhost:8081 (unreachable inside a step container), and the derived non-localhost address
+      # then needs the exact-id mirror in .qits-maven-settings.xml to get past Maven's HTTP blocker —
+      # the same pair every service's image build uses.
+      export QITS_MAVEN_REPOSITORY_URL="$QITS_MAVEN_REGISTRY_URL"
+
+      # `-pl .,core,client` — THE ROOT RIDES ALONG, AND IT IS NOT OPTIONAL. Both module poms declare
+      # `<parent>eu.wohlben.qits:qits-containers</parent>`, so a consumer resolving either jar
+      # resolves that parent pom first. Deploying the two modules alone would publish jars whose
+      # parent exists in no registry, and the failure lands on the CONSUMER's build rather than on
+      # this one.
+      #
+      # `-N` IS THE WRONG TOOL AND MUST NOT BE ADDED. It means "do not recurse into <modules>", so
+      # it would reduce this reactor to the root alone — the parent pom without the two jars it is
+      # the parent of, which is the mirror image of the failure above. `-pl` already names exactly
+      # the three projects to build, which is the selection that is wanted; the two options do not
+      # combine into anything useful.
+      #
+      # `service` is deliberately absent from the list. It is the deployable, it ships as the image
+      # step 2 pushes, and a `deploy` of it would upload a jar `artifacts:` does not declare.
+      ./mvnw -B -ntp -s .qits-maven-settings.xml -pl .,core,client deploy -DskipTests \
+        -Dqits.maven.repository.url="$QITS_MAVEN_REGISTRY_URL" \
+        -DaltDeploymentRepository="qits::default::$QITS_MAVEN_REGISTRY_URL"
+
+    # --- step 2: the image ------------------------------------------------------------------------
+    # ci-base: the docker CLI builds and pushes, git fetches the tag, jq reads the event payload.
+  - image: qits/build-images/ci-base:latest
+    docker: true
+    timeout-seconds: 3600
+    script: |
+      # Without -e a failed docker build is swallowed and a green release run makes qits-ci announce
+      # an image that was never pushed. -u makes an unset registry variable stop the step.
+      set -eu
+
+      version=$(printf '%s' "$QITS_EVENT_PAYLOAD" | jq -er .version)
+      case "$version" in
+        ''|*[!0-9A-Za-z._+-]*) echo "refusing an implausible version: $version" >&2; exit 1 ;;
+      esac
+      echo "releasing qits/qits-containers:$version"
+
+      git fetch "$QITS_CI_REPOSITORY_URL" "refs/tags/$version:refs/tags/$version"
+      git checkout --detach "$version"
+
+      # Same host doctrine as ci-post-receive.yml: --network host, NOT a custom network, because
+      # buildkit refuses custom networks on a build; and the maven address derived from the same
+      # injected env the image tag uses, or the platform jars cannot be resolved inside the build.
+      ref="$QITS_REGISTRY/$QITS_IMAGE_REPOSITORY/qits-containers:$version"
+      docker build --network host \
+        --build-arg QITS_MAVEN_REPOSITORY_URL="http://$QITS_REGISTRY/artifacts/maven/maven" \
+        -t "$ref" -f docker/Dockerfile .
+      docker push "$ref"
+      docker rmi "$ref" || true

@@ -1,0 +1,48 @@
+# How qits-deployments deploys this repo. It reads this file from the git host at the built sha, so
+# the answer travels with the commit.
+#
+# CARRYING THE FILE AT ALL is the other thing it says. qits-workspaces reads it on a release to
+# decide whether this repository deploys — a library or an SPA carries none and its release is the
+# trunk push alone. This repository publishes two library jars AND deploys, which is why it carries
+# both this file and a `type: maven` half in ci-event-release.yml.
+#
+# ENVIRONMENT service. Every consumer this exists for — qits-ci, qits-workspaces, qits-projects and
+# the daemons — is an env service, and the owner in every path here is the caller's machine-token
+# subject, which qits-idp mints per environment (`dev-qits-ci`, `prod-qits-ci`). That prefix is what
+# keeps two environments sharing one docker daemon out of each other's rows, so an env-scoped
+# orchestrator is the consistent shape. A green build deploys into whichever tier listens to the
+# built branch.
+deployment_target: environment
+
+# TWO DATABASES, because this application opens two datasources with two Flyway lineages.
+# qits-deployments creates a login role and a database for each on the postgres of this tier before
+# the container starts and injects QITS_RESOURCE_<NAME>_URL / _USERNAME / _PASSWORD — the generic
+# contract the application and the qits-eventstream jar map onto quarkus.datasource.* in their own
+# shipped defaults.
+#
+# `db` takes the DERIVED default database, qits_containers: `qits_` plus the application name
+# without its qits- prefix, dashes to underscores. It holds the registry — ct_container and
+# ct_volume — which is the only record anywhere of which containers this service may act on. An
+# orchestrator that came up on an empty store it invented would see every running container as named
+# by no row, which is exactly the state the adoption rule exists to keep it from acting on.
+#
+# THE EVENTSTREAM ENTRY IS NOT OPTIONAL AND ITS NAME IS LOAD-BEARING. The qits-eventstream jar is in
+# this deployable from the scaffold — it carries the causation persistence trio every row here
+# decides about — and it reads QITS_RESOURCE_EVENTSTREAM_*, so the resource NAME here is what makes
+# those variables exist; rename it and the expression is unresolvable and the process refuses to boot
+# at Flyway. Being dark (`qits.eventstream.enabled`) would not save it — dark stops publishing,
+# sweeping and dialling, never the datasource, which Quarkus opens and migrates at boot regardless.
+#
+# It NAMES its database, and has to: the default is derived from the application, so both entries
+# would otherwise have asked for qits_containers and the parser refuses that after resolution.
+resources: postgresql:db, postgresql:eventstream:qits_containers_eventstream
+
+# THE PROBE THE DEPLOY GATES ON. It is the derived default — /containers/q/health/ready, the
+# repository name minus `qits-` — and it is spelled out anyway, so a future change to
+# quarkus.http.non-application-root-path is a diff here rather than a deploy that gates on a 404.
+#
+# Readiness rather than liveness: quarkus-agroal registers a readiness check per datasource as soon
+# as a health extension is present, so this path is red while either database above is unreachable.
+# Liveness answers UP with an empty check list — an orchestrator that boots and cannot read its
+# registry would pass it, and that container answers about places it has no rows for.
+health_path: /containers/q/health/ready

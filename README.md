@@ -242,25 +242,65 @@ persisted "for" it.
 - **The consumers.** qits-ci, qits-workspaces and qits-projects still run their own containers; the
   point of this service is that they stop, one at a time.
 
-## What a deployment must set
+## Deploying it
+
+A push builds `docker/Dockerfile` — a Mandrel builder stage that native-compiles `service`, a
+`ubi-minimal` runtime stage that carries the binary **and the docker CLI** — and pushes it as
+`qits/qits-containers:<sha>`; a release rebuilds the same content under the released version
+(`.config/qits/ci-post-receive.yml` and `.config/qits/ci-event-release.yml`). Both builds run
+`--network host` with `--build-arg QITS_MAVEN_REPOSITORY_URL=…`, because the four platform jars this
+repo takes exist only in the platform's own Maven repository and a docker build reaches no other
+address for them.
+
+**Each pipeline is two steps**, because no build image carries both a JDK and the docker CLI: the
+suite runs on `maven-base`, the image build on `ci-base`. The release pipeline publishes **three**
+things — `qits-containers-core`, `qits-containers-client` and the image — which makes it the
+platform's first dual maven+docker release; `AGENTS.md` says what that costs.
+
+`.config/qits/deployments.yml` is the deploy answer: **an environment service**, with
+`resources: postgresql:db, postgresql:eventstream:qits_containers_eventstream` and the health gate at
+`/containers/q/health/ready`.
+
+**One port, 8080**, for all of it — `/containers/api/**` (JAX-RS), `/containers/tunnel/**` (the data
+plane's sockets) and `/containers/q/**` (health, OpenAPI) are three route stacks in one process, not
+three listeners. The tunnels this service binds for itself are **loopback** and are not this port.
+
+### What a deployment must set
 
 | Env | Why it is not defaulted |
 |---|---|
 | `QITS_RESOURCE_DB_URL` / `_USERNAME` / `_PASSWORD` | The registry. Nothing is defaulted, so an unset triple is a boot failure at Flyway rather than an orchestrator answering from a database nobody meant. On the platform these are not set by hand: `.config/qits/deployments.yml` declares `resources: postgresql:db` and qits-deployments injects all three before the container starts. |
-| `QITS_RESOURCE_EVENTSTREAM_URL` / `_USERNAME` / `_PASSWORD` | The event bus client's own store, on the same contract — `resources: postgresql:eventstream`. The resource must be named `eventstream`, because the variable names follow the resource name. |
+| `QITS_RESOURCE_EVENTSTREAM_URL` / `_USERNAME` / `_PASSWORD` | The event bus client's own store, on the same contract — `resources: postgresql:eventstream:qits_containers_eventstream`. The resource must be named `eventstream`, because the variable names follow the resource name, and it must name its database, because the derived default is the one `db` already took. |
 
 **Refusing to boot without a database is deliberate.** The rows are the only record of which
 containers may exist. An orchestrator that came up on an empty store it invented would see every
 running container as named by no row — which is precisely the state the adoption rule exists to
 prevent it from acting on.
 
+### The docker socket, which is a decision rather than a default
+
+**The socket is not in the image, and it is the deployment that grants it:**
+
+    -v /var/run/docker.sock:/var/run/docker.sock --group-add <the socket's gid>
+
+The mount hands this container control of the host's daemon, which is root-equivalent, so it is an
+explicit act rather than something baked in. `--group-add` is the other half of the same act: the
+image runs as UID 1001 in group 0 and the socket is `root:docker` 0660, so without the daemon's group
+the CLI is present and every call is a permission denial — which reads like a broken image and is
+not. Neither is a key in the deployment grammar; both are run-args.
+
+Without the socket the service still starts and still serves. That is the boot stance below, not an
+oversight: a host that has just rebooted has this service up before its docker.
+
+### What else a deployment may set
+
 Everything else has a shipped default and a deployment overrides what it means to:
 `QITS_AUTH_MACHINE_REQUIRED=true` with `QITS_AUTH_MACHINE_AUDIENCE=<env>-qits-containers` turns the
-gate on; `QITS_CONTAINERS_INSTANCE` distinguishes two instances in `docker ps`;
-`QITS_CONTAINERS_NETWORK` and `QITS_CONTAINERS_SHARED_VOLUMES` name what the boot step makes sure
-of; `QITS_CONTAINERS_PROXY_ENABLED=true` switches the data plane on, and no deployment sets it yet.
-The container needs the docker socket, and it is the deployment that grants it — nothing here
-mounts one for itself.
+gate on — one platform-wide gate, shipped off, and turning it on with no audience set fails at
+startup rather than accepting tokens addressed elsewhere. `QITS_CONTAINERS_INSTANCE` distinguishes
+two instances in `docker ps`; `QITS_CONTAINERS_NETWORK` and `QITS_CONTAINERS_SHARED_VOLUMES` name
+what the boot step makes sure of; `QITS_CONTAINERS_PROXY_ENABLED=true` switches the data plane on,
+and no deployment sets it yet.
 
 ### What a boot does, in order
 

@@ -221,3 +221,35 @@ is `service`'s `ContainersClientWireTest`, because test scope on the deployable 
 classpath both jars may share. **The HTTP/1.1 pin is asserted on the client's configuration, not on
 a response**: `HttpResponse.version()` reports what the two ends negotiated, and every server this
 client meets speaks HTTP/1.1, so that assertion would pass with the `version(...)` line deleted.
+
+## The pipelines, and the one thing that is new about them
+
+`README.md`'s "Deploying it" has the shape. Two things about `.config/qits/` are this file's.
+
+**Both pipelines are two steps, and no build image would let them be one.** A `./mvnw` needs a JDK
+and `ci-base` is `docker:cli` plus bash/curl/git/jq; `maven-base` carries no docker CLI. So the
+suite runs on one image and the image build on the other. Each step is its own container with its
+own clone, which is why the release pipeline's two steps each read the version and check out the tag
+rather than one doing it for both.
+
+**`.config/qits/ci-event-release.yml` is the platform's FIRST dual maven+docker release**, and the
+probe-skip semantics are the part to get right. `artifacts:` declares three things — the two library
+jars and the image — because a declaration is a claim about what **this script pushes**, and qits-ci
+announces one `SoftwareRelease` per entry without being able to see what a step really did.
+`qits-containers-service` is not declared, because nothing uploads it; the deployable ships as the
+image. qits-githost's file is the same rule pointing the other way and is worth reading beside this
+one: it publishes library jars, does not push them from its release pipeline, and therefore does not
+declare them.
+
+The jar step is skip-if-published, and **the two probes are AND-chained on purpose**. `deploy` runs
+across one reactor and ships both modules together, so a version with one module missing has to go
+again whole; an `||` there would skip on a half-published version and leave it half-published
+forever. The probes read the module poms and not the root: the root can only be absent if the run
+never reached either module, which the two probes already say.
+
+**`-pl .,core,client` — the root rides along, and `-N` is the wrong tool.** Both module poms declare
+this repository's root as their `<parent>`, so a consumer resolving either jar resolves that parent
+pom first; deploying the modules alone publishes jars whose parent exists in no registry, and the
+failure lands on the consumer's build. `-N` means "do not recurse into `<modules>`", so it would
+produce the mirror-image failure — the parent pom with neither jar. `-pl` is already the selection
+that is wanted.

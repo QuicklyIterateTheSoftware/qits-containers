@@ -1,0 +1,55 @@
+# The pipeline qits-ci runs on every push to a tracked branch of this repository.
+#
+# TWO STEPS, because the suite and the image want different containers: the suite wants maven and a
+# JDK, the image build wants the docker CLI and a socket. Splitting them also means a red suite
+# never publishes an image — the steps run in order and the run stops at the first failure.
+#
+# There is no npm half here. This service is machine-facing and carries no client, which is what
+# makes ci-base the right image for step 2 rather than node-docker-base.
+steps:
+    # --- step 1: the suite ------------------------------------------------------------------------
+  - image: qits/build-images/maven-base:latest
+    timeout-seconds: 1800
+    script: |
+      set -eu
+      # The four platform jars — qits-db-core, qits-arch-rules, qits-eventstream, qits-auth-core —
+      # resolve from the platform registry; the pom's default names localhost:8081, unreachable from
+      # inside a step container, and the derived address needs the exact-id mirror to pass Maven's
+      # HTTP blocker (see .qits-maven-settings.xml).
+      #
+      # The suite starts zonky's embedded postgres, and initdb refuses to
+      # run as root — which step containers are. Measured 2026-08-11 (run
+      # c916d334 red on qits-eventstream, same tree green as a user): drop
+      # to a build user. Both suites here spawn one, so both need it.
+      export QITS_MAVEN_REPOSITORY_URL="$QITS_MAVEN_REGISTRY_URL"
+      adduser -D build
+      chown -R build /workspace
+      su build -c './mvnw -B -ntp -s .qits-maven-settings.xml verify \
+        -Dqits.maven.repository.url="$QITS_MAVEN_REPOSITORY_URL"'
+
+    # --- step 2: the image ------------------------------------------------------------------------
+  - image: qits/build-images/ci-base:latest
+    docker: true
+    timeout-seconds: 3600
+    script: |
+      # `set -eu` is load-bearing rather than tidy: the daemon runs this with `bash -c` and no -e, so
+      # without it a failed build is swallowed by the next command's exit code — the push fails,
+      # `docker rmi || true` answers 0, and the run reports SUCCESS. The deployer is then told an
+      # image exists that does not. -u makes an unset registry variable stop the step too.
+      set -eu
+      # --network host, NOT a custom network: buildkit (the builder format the platform targets — a
+      # swarm cannot assume the legacy builder) refuses custom networks on a build. Host networking
+      # is buildkit-supported, and the maven registry's host-published address is derived from the
+      # same injected env the image tag uses, so no address is stated here. The build needs it
+      # because the four platform jars live only in that registry.
+      #
+      # Publish under the tag that is the whole contract with qits-deployments —
+      # <registry>/<repository>/<this repo's name>:<sha>. The step's own container only drives the
+      # docker CLI; the build and the push happen in the host's daemon through the socket this step
+      # declares (docker: true).
+      ref="$QITS_REGISTRY/$QITS_IMAGE_REPOSITORY/qits-containers:$QITS_CI_SHA"
+      docker build --network host \
+        --build-arg QITS_MAVEN_REPOSITORY_URL="http://$QITS_REGISTRY/artifacts/maven/maven" \
+        -t "$ref" -f docker/Dockerfile .
+      docker push "$ref"
+      docker rmi "$ref" || true
