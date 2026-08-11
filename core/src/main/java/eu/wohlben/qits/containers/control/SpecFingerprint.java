@@ -36,6 +36,15 @@ import java.util.Map;
  *
  * <p>The same mapper produces the stored JSON, so {@code spec_json} is deterministic too. That costs
  * nothing and buys a diff between two rows that reads.
+ *
+ * <p><b>Every type this class serializes must be named in {@code spec/SpecReflection}.</b> That is
+ * the price of the mapper being this class's own: a hand-built mapper is invisible to the build step
+ * that decides what a native image may reflect over, and Quarkus registers only the types it finds
+ * on a REST resource signature — which none of these are. A missing entry is green on the JVM, green
+ * in this suite, and a 500 on every {@code ensure} the deployed binary answers. Measured
+ * 2026-08-11. So a record component added to {@link ContainerSpec}, and any nested record or enum it
+ * brings with it, is a change to that list too; {@code SpecReflectionCoverageTest} fails the build
+ * when the two drift apart.
  */
 final class SpecFingerprint {
 

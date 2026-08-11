@@ -90,6 +90,18 @@ exempt, including the ones that "cannot" block.
   `service/src/main/resources/application.properties` at ordinal 250. Never restate one file's key
   in the other, and never re-declare an app-level setting in test resources: a suite green because
   the *test* copy is right proves nothing about what ships.
+- **A type Jackson touches outside a REST signature is named in a reflection holder.** Quarkus
+  auto-registers what it finds on a resource method; nothing else. `SpecFingerprint` builds its own
+  `ObjectMapper` and serializes `ContainerSpec` from inside the registry, so the spec records are
+  invisible to that scan — and a missing registration is green on the JVM, green in this suite, and
+  a 500 on every `ensure` the native binary answers. Measured 2026-08-11, on the first real CI step
+  this service was asked to start. Two holders carry the lists, each beside what it covers:
+  `spec/SpecReflection` for the spec records and `api/ContainersWireReflection` for the whole wire
+  family (`ErrorBody` is the one that is really invisible — it reaches a caller only as a `Response`
+  entity — and registering the family rather than the doubted entry is what stops the next record
+  inheriting somebody's reading of the build step). Adding a record component adds an entry;
+  `SpecReflectionCoverageTest` and `ContainersWireReflectionTest` fail when the two drift apart.
+  Neither test can prove the registration *works* — only a native binary can.
 - **Schema changes append to `core/src/main/resources/db/containers/migration/`.** Never edit an
   applied migration. V1's header records the two decisions it makes — no check constraints on enum
   columns, and the spec's environment is never persisted because it carries secrets. V2 is that rule
