@@ -54,5 +54,19 @@ public final class ContainersTimeouts {
   /** How much of a pull's progress output is captured. Enough to name a failure, never a stream. */
   public static final int PULL_MAX_CHARS = 8_000;
 
+  /**
+   * How much of a {@code docker run}'s output is kept. A run prints one container id when it works
+   * and a refusal when it does not, and the refusal is the whole diagnosis of a workload that never
+   * started — so it is the log bound rather than the short one.
+   */
+  public static final int RUN_MAX_CHARS = 64_000;
+
+  /**
+   * Every other call: an inspect, a stop, a remove, a listing, a volume operation. They answer in
+   * one short line and their failures are one short sentence, so anything past this is a daemon
+   * saying something nobody asked for.
+   */
+  public static final int SHORT_MAX_CHARS = 8_000;
+
   private ContainersTimeouts() {}
 }

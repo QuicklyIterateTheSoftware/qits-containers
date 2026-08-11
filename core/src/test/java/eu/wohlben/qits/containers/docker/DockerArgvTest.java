@@ -237,6 +237,31 @@ public class DockerArgvTest {
   }
 
   @Test
+  public void theObservationFormatIsTheMapSafeOneAndNotTheThreeAbovePastedTogether() {
+    // MEASURED on docker 29.7.2, and the whole reason this constant is spelled out rather than
+    // composed: `{{.Id}}` is not a field of the typed inspect object (the Go field is ID), so it
+    // forces the CLI onto its raw-JSON fallback — and on a map, `{{if .State.Health}}` is the ERROR
+    // `map has no entry for key "Health"` rather than a false. `index` answers the zero value
+    // instead, so a container with no healthcheck reads `running/none` and one with a check reads
+    // `running/healthy`. Pasting the two single-field formats after `{{.Id}}` compiles, renders in
+    // a unit test, and fails against every container the platform runs without a healthcheck.
+    assertEquals(
+        List.of(
+            "docker",
+            "inspect",
+            "--format",
+            "{{.Id}}|{{.State.Status}}/"
+                + "{{if index .State \"Health\"}}{{(index .State \"Health\").Status}}"
+                + "{{else}}none{{end}}"
+                + "|{{.State.StartedAt}}",
+            "c"),
+        DockerArgv.inspectObservation("docker", "c"));
+    assertFalse(
+        DockerArgv.OBSERVATION_FORMAT.contains("{{if .State.Health}}"),
+        "the typed-path health belt does not work on the map path this format is on");
+  }
+
+  @Test
   public void theSmallCommandsAreWhatTheySay() {
     assertEquals(List.of("docker", "stop", "c"), DockerArgv.stop("docker", "c"));
     assertEquals(List.of("docker", "rm", "-f", "c"), DockerArgv.rm("docker", "c"));

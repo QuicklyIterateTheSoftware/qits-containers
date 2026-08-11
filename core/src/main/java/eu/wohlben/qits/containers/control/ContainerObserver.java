@@ -110,8 +110,12 @@ public class ContainerObserver {
    * would settle rows the test is still arranging. The suite drives {@link #observeOnce()} and the
    * sweeps' own entry points directly, so the interval keeps its shipped value in the suite rather
    * than being overridden to disable something that never starts.
+   *
+   * <p><b>It starts after {@link BootSweep}</b>, by {@link BootSweep#OBSERVER_PRIORITY}. A pass
+   * landing before the sweep would meet every in-flight row before the sweep had decided about it,
+   * and could spend a strike on a workload that is about to be adopted.
    */
-  void onStart(@Observes StartupEvent event) {
+  void onStart(@Observes @jakarta.annotation.Priority(BootSweep.OBSERVER_PRIORITY) StartupEvent event) {
     if (LaunchMode.current() == LaunchMode.TEST) {
       return;
     }

@@ -72,6 +72,12 @@ public class CtContainerRepository implements PanacheRepositoryBase<CtContainer,
     return find("desiredState <> ?1 order by seq", DesiredState.ABSENT).list();
   }
 
+  /** Every live row of one owner — what an owner's own listing reads. Never a label sweep. */
+  public List<CtContainer> listLive(String owner) {
+    return find("owner = ?1 and desiredState <> ?2 order by seq", owner, DesiredState.ABSENT)
+        .list();
+  }
+
   /** The live rows of one owner's workload — what a destroy-all iterates. Never a label sweep. */
   public List<CtContainer> listLive(String owner, String workload) {
     return find(

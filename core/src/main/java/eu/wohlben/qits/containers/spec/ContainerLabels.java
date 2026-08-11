@@ -69,6 +69,21 @@ public final class ContainerLabels {
   }
 
   /**
+   * The label set of a volume an owner asked for <b>by name</b>, with no workload behind it.
+   *
+   * <p>Two labels rather than four, because there is no third and fourth to write: nothing mounts
+   * it yet and no ref names it. {@code VolumeReconcile} narrows its listing on {@link #MANAGED}
+   * alone, so a volume labelled this way is found exactly as a workload's own is — and the row is
+   * what decides either way.
+   */
+  public static Map<String, String> forOwnerVolume(String owner) {
+    Map<String, String> labels = new LinkedHashMap<>();
+    labels.put(MANAGED, MANAGED_VOLUME);
+    labels.put(OWNER, ContainersIdentifiers.requireOwner(owner));
+    return labels;
+  }
+
+  /**
    * The label set of one named volume. No row and no instance: a volume outlives the container that
    * mounted it and the process that made it, which is the whole reason it is a volume.
    */

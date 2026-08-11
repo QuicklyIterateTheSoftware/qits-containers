@@ -8,6 +8,7 @@ import eu.wohlben.qits.containers.spec.LifecyclePolicy;
 import eu.wohlben.qits.db.DbRetry;
 import io.quarkus.runtime.LaunchMode;
 import io.quarkus.runtime.StartupEvent;
+import jakarta.annotation.Priority;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
 import jakarta.inject.Inject;
@@ -68,11 +69,31 @@ public class BootSweep {
   @Inject java.time.Clock clock;
 
   /**
+   * The order the three startup steps run in, as CDI priorities. Lower runs first, and
+   * {@value #STARTUP_PRIORITY} is the platform default spelled out so the two numbers around it are
+   * readable as "before" and "after" rather than as magic.
+   *
+   * <p>{@code SharedResources} ({@value #SHARED_RESOURCES_PRIORITY}) makes sure the shared volumes
+   * exist first, this sweep adopts second, and {@code ContainerObserver}'s ticker
+   * ({@value #OBSERVER_PRIORITY}) starts last. <b>The last one is the one that matters.</b> An
+   * observation pass landing before the sweep would see every in-flight row as a container it knows
+   * nothing about and could spend a strike on a workload the sweep is about to adopt. Two observers
+   * of one event have no order without these numbers — qits-platform-deployments avoids the
+   * question by doing both in one method, which is not open to us with a sweep and a ticker in
+   * different classes.
+   */
+  public static final int SHARED_RESOURCES_PRIORITY = 2400;
+
+  public static final int STARTUP_PRIORITY = 2500;
+
+  public static final int OBSERVER_PRIORITY = 2600;
+
+  /**
    * Skipped in test mode, exactly as qits-platform-deployments' is: a {@code @QuarkusTest} would
    * otherwise run a sweep against whatever rows the previous class left, before the test that owns
    * them has arranged anything. The suite drives {@link #sweepOnce()} itself.
    */
-  void onStart(@Observes StartupEvent event) {
+  void onStart(@Observes @Priority(STARTUP_PRIORITY) StartupEvent event) {
     if (LaunchMode.current() == LaunchMode.TEST) {
       return;
     }

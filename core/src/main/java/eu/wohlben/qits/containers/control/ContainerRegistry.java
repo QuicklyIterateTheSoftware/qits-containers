@@ -120,12 +120,19 @@ public class ContainerRegistry {
   // What an operation answers with. Plain records: nothing hands an entity across a bracket.
   // ---------------------------------------------------------------------------------------------
 
-  /** What {@link #ensure} did, and where the place stands now. */
+  /**
+   * What {@link #ensure} did, and where the place stands now.
+   *
+   * <p>{@code specHash} is the hash the row now carries — the one a later {@code ensure} is
+   * compared against. It is on the answer so a caller can tell "this is the spec I sent" from "this
+   * is what was already here" without reading the row back.
+   */
   public record Ensured(
       UUID rowId,
       String containerName,
       DesiredState desired,
       ObservedState observed,
+      String specHash,
       boolean created,
       String detail) {}
 
@@ -143,6 +150,40 @@ public class ContainerRegistry {
 
   /** One place's outcome inside a {@link #destroyAll}. */
   public record Destroyed(String ownerRef, String containerName, boolean removed, String detail) {}
+
+  /**
+   * One place as a reader sees it: the row, plus the two addresses its <b>stored</b> spec names.
+   *
+   * <p>The network and the alias come from {@code spec_json} rather than from a second table,
+   * because they are what the spec asked for and the spec is what the row keeps. A stored spec that
+   * cannot be read leaves them at their fallbacks rather than failing the read — a listing is a
+   * diagnosis, and a row nobody can render is the one a reader most needs to see.
+   */
+  public record Place(
+      UUID rowId,
+      String owner,
+      String workload,
+      String ownerRef,
+      String containerName,
+      String image,
+      LifecyclePolicy.Type policy,
+      DesiredState desired,
+      ObservedState observed,
+      String specHash,
+      String network,
+      String alias,
+      String detail,
+      Instant createdAt,
+      Instant updatedAt,
+      Instant lastObservedAt,
+      Instant lastTouchedAt) {}
+
+  /** One volume row as a reader sees it. */
+  public record Volume(UUID rowId, String owner, String name, VolumeState desired, Instant createdAt) {}
+
+  /** What a volume ask did. {@code existed} is false for one that was already absent. */
+  public record VolumeOutcome(
+      UUID rowId, String name, boolean existed, boolean ok, String detail) {}
 
   /** What the upsert decided, as plain values the docker phase can act on. */
   private enum Step {
@@ -165,6 +206,7 @@ public class ContainerRegistry {
       List<String> ownVolumes,
       DesiredState desired,
       ObservedState observed,
+      String specHash,
       boolean created) {}
 
   // ---------------------------------------------------------------------------------------------
@@ -231,6 +273,7 @@ public class ContainerRegistry {
           plan.containerName(),
           plan.desired(),
           plan.observed(),
+          plan.specHash(),
           false,
           plan.step() == Step.KEEP ? "[left as it is: the running spec differs and no recreate was asked for]" : null);
     }
@@ -273,20 +316,32 @@ public class ContainerRegistry {
             "[adopted after a refused run: " + name + " is already running and this row names it]");
         LOG.infof("Adopted %s: docker refused a second run of a container this row already names", name);
         return new Ensured(
-            plan.rowId(), name, DesiredState.RUNNING, ObservedState.RUNNING, plan.created(), null);
+            plan.rowId(),
+            name,
+            DesiredState.RUNNING,
+            ObservedState.RUNNING,
+            plan.specHash(),
+            plan.created(),
+            null);
       }
       String detail = "[docker refused to start " + name + ": " + Details.brief(started.detail()) + "]";
       settle(plan.rowId(), ObservedState.MISSING, detail);
       LOG.warnf("Could not start %s for %s: %s", name, place, Details.brief(started.detail()));
       return new Ensured(
-          plan.rowId(), name, DesiredState.RUNNING, ObservedState.MISSING, plan.created(), detail);
+          plan.rowId(),
+          name,
+          DesiredState.RUNNING,
+          ObservedState.MISSING,
+          plan.specHash(),
+          plan.created(),
+          detail);
     }
 
     settle(plan.rowId(), ObservedState.STARTING, null);
     ObservedState observed = observedOf(driver.inspect(name, ContainersTimeouts.INSPECT));
     settle(plan.rowId(), observed, null);
     return new Ensured(
-        plan.rowId(), name, DesiredState.RUNNING, observed, plan.created(), null);
+        plan.rowId(), name, DesiredState.RUNNING, observed, plan.specHash(), plan.created(), null);
   }
 
   /**
@@ -371,7 +426,14 @@ public class ContainerRegistry {
     // connection is a body failure — certainly not committed, so safe to run again.
     containers.flush();
     return new Plan(
-        row.id, row.containerName, step, ownVolumes, row.desiredState, row.observedState, created);
+        row.id,
+        row.containerName,
+        step,
+        ownVolumes,
+        row.desiredState,
+        row.observedState,
+        row.specHash,
+        created);
   }
 
   /** The converging volume row. Written before the volume exists, exactly as the container's is. */
@@ -601,6 +663,212 @@ public class ContainerRegistry {
     }
     return List.copyOf(outcomes);
   }
+
+  // ---------------------------------------------------------------------------------------------
+  // reads
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * What is at this place, or empty when no live row names it.
+   *
+   * <p><b>Empty means the row is cleanly absent and nothing else.</b> A database that could not be
+   * reached throws out of here — {@link #read} is a retried bracket and it gives up loudly — so the
+   * API above can answer 404 for "there is nothing here" without ever answering it for "this
+   * service could not find out". That is the githost doctrine, and it matters more here than in a
+   * catalogue: a caller that reads 404 concludes its workload was never started.
+   */
+  public Optional<Place> status(String owner, String workload, String ownerRef) {
+    ContainersIdentifiers.requireOwner(owner);
+    ContainersIdentifiers.requireWorkload(workload);
+    ContainersIdentifiers.requireRef(ownerRef);
+    return Optional.ofNullable(
+        read(
+            "The status read of " + place(owner, workload, ownerRef),
+            () -> {
+              CtContainer row = containers.findLive(owner, workload, ownerRef);
+              return row == null ? null : placeOf(row);
+            }));
+  }
+
+  /**
+   * An owner's live places, oldest first — every workload when {@code workload} is null.
+   *
+   * <p><b>From the rows.</b> There is no listing by label anywhere in this service, and this is the
+   * method a caller would otherwise be tempted to write one for.
+   */
+  public List<Place> list(String owner, String workload) {
+    ContainersIdentifiers.requireOwner(owner);
+    if (workload != null) {
+      ContainersIdentifiers.requireWorkload(workload);
+    }
+    return read(
+        "The listing of " + owner + "/" + (workload == null ? "*" : workload),
+        () ->
+            (workload == null ? containers.listLive(owner) : containers.listLive(owner, workload))
+                .stream()
+                    .map(ContainerRegistry::placeOf)
+                    .toList());
+  }
+
+  /** One row, with the two addresses read off its stored spec. */
+  private static Place placeOf(CtContainer row) {
+    String network = "";
+    String alias = row.containerName;
+    try {
+      ContainerSpec spec = SpecFingerprint.fromPersistedJson(row.specJson);
+      network = spec.network();
+      alias = spec.aliases().isEmpty() ? row.containerName : spec.aliases().getFirst();
+    } catch (RuntimeException e) {
+      LOG.warnf(
+          "Could not read the stored spec of %s, so its listing carries no addresses: %s",
+          row.containerName, e.getMessage());
+    }
+    return new Place(
+        row.id,
+        row.owner,
+        row.workload,
+        row.ownerRef,
+        row.containerName,
+        row.image,
+        row.policy,
+        row.desiredState,
+        row.observedState,
+        row.specHash,
+        network,
+        alias,
+        row.detail,
+        row.createdAt,
+        row.updatedAt,
+        row.lastObservedAt,
+        row.lastTouchedAt);
+  }
+
+  // ---------------------------------------------------------------------------------------------
+  // volumes an owner asks for by name
+  // ---------------------------------------------------------------------------------------------
+
+  /**
+   * Make sure this owner has this volume, and record the row that claims it.
+   *
+   * <p>Same ordering as {@link #ensure}: <b>the row is committed before docker is asked</b>, so a
+   * crash between the two leaves a volume the registry already names. It has to be that way round
+   * for volumes as well as for containers — {@code VolumeReconcile} may remove only what a row
+   * names, so a volume made before its row would be one nothing could ever take back.
+   */
+  public VolumeOutcome ensureVolume(String owner, String name) {
+    ContainersIdentifiers.requireOwner(owner);
+    ContainersIdentifiers.requireVolumeName(name);
+    Claimed claimed =
+        DbRetry.inNewTx(
+            "The volume claim of " + owner + "/" + name,
+            () -> {
+              CtVolume row = volumes.findByOwnerAndName(owner, name);
+              boolean fresh = row == null;
+              if (fresh) {
+                row = new CtVolume();
+                row.id = UUID.randomUUID();
+                row.owner = owner;
+                row.name = name;
+                row.createdAt = clock.instant();
+              }
+              row.labelsJson = SpecFingerprint.write(ContainerLabels.forOwnerVolume(owner));
+              row.desiredState = VolumeState.PRESENT;
+              if (fresh) {
+                volumes.persist(row);
+              }
+              volumes.flush();
+              return new Claimed(row.id, fresh);
+            },
+            CUTOVER_BUDGET);
+
+    ContainersDriver.OpResult made =
+        driver.ensureVolume(
+            new VolumeSpec(name),
+            ContainerLabels.forOwnerVolume(owner),
+            ContainersTimeouts.VOLUME);
+    if (!made.ok()) {
+      LOG.warnf(
+          "Could not create the volume %s for %s: %s", name, owner, Details.brief(made.detail()));
+      return new VolumeOutcome(
+          claimed.rowId(),
+          name,
+          !claimed.fresh(),
+          false,
+          "[docker could not create " + name + ": " + Details.brief(made.detail()) + "]");
+    }
+    return new VolumeOutcome(claimed.rowId(), name, !claimed.fresh(), true, null);
+  }
+
+  /** The row claiming this volume, or empty when this owner claims none by that name. */
+  public Optional<Volume> volume(String owner, String name) {
+    ContainersIdentifiers.requireOwner(owner);
+    ContainersIdentifiers.requireVolumeName(name);
+    return Optional.ofNullable(
+        read(
+            "The volume read of " + owner + "/" + name,
+            () -> {
+              CtVolume row = volumes.findByOwnerAndName(owner, name);
+              return row == null
+                  ? null
+                  : new Volume(row.id, row.owner, row.name, row.desiredState, row.createdAt);
+            }));
+  }
+
+  /**
+   * Take this owner's volume away.
+   *
+   * <p>Idempotent, like {@link #delete}: a volume no row of this owner names is a success with
+   * {@code existed=false}. The row is marked {@code ABSENT} first and is dropped only once docker
+   * confirms the removal — a remove docker refused leaves an {@code ABSENT} row, which is exactly
+   * what {@code VolumeReconcile} replays on the next pass.
+   */
+  public VolumeOutcome deleteVolume(String owner, String name) {
+    ContainersIdentifiers.requireOwner(owner);
+    ContainersIdentifiers.requireVolumeName(name);
+    UUID rowId =
+        DbRetry.inNewTx(
+            "The volume delete of " + owner + "/" + name,
+            () -> {
+              CtVolume row = volumes.findByOwnerAndName(owner, name);
+              if (row == null) {
+                return null;
+              }
+              row.desiredState = VolumeState.ABSENT;
+              volumes.flush();
+              return row.id;
+            },
+            CUTOVER_BUDGET);
+    if (rowId == null) {
+      return new VolumeOutcome(null, name, false, true, "[already absent]");
+    }
+
+    ContainersDriver.OpResult dropped = driver.removeVolume(name, ContainersTimeouts.VOLUME);
+    if (!dropped.ok()) {
+      LOG.warnf(
+          "Could not remove the volume %s of %s, so its row stays absent for the reconcile: %s",
+          name, owner, Details.brief(dropped.detail()));
+      return new VolumeOutcome(
+          rowId,
+          name,
+          true,
+          false,
+          "[docker could not remove " + name + ": " + Details.brief(dropped.detail()) + "]");
+    }
+    DbRetry.runInNewTx(
+        "The volume row drop of " + owner + "/" + name,
+        () -> {
+          CtVolume row = volumes.findByOwnerAndName(owner, name);
+          if (row != null) {
+            volumes.delete(row);
+          }
+          volumes.flush();
+        },
+        CUTOVER_BUDGET);
+    return new VolumeOutcome(rowId, name, true, true, null);
+  }
+
+  /** The volume row a claim wrote, and whether it was written now. */
+  private record Claimed(UUID rowId, boolean fresh) {}
 
   // ---------------------------------------------------------------------------------------------
   // The seams the sweeps share

@@ -187,6 +187,47 @@ public final class DockerArgv {
         ContainersIdentifiers.requireContainerName(name));
   }
 
+  /**
+   * The whole of one observation, in one line: {@code <id>|<status>/<health>|<startedAt>}.
+   *
+   * <p>It is one call rather than three because the observation pass costs one {@code docker
+   * inspect} <b>per row, per pass, forever</b>, and {@code ContainersDriver.Observed} carries all
+   * three fields.
+   *
+   * <p><b>It is not {@code "{{.Id}}|" + STATE_FORMAT + "|" + STARTED_AT_FORMAT}, and the reason is
+   * measured rather than stylistic.</b> On docker 29.7.2 that composition fails on any container
+   * without a healthcheck, with {@code map has no entry for key "Health"} — while
+   * {@link #STATE_FORMAT} on its own answers {@code running/none} perfectly. The difference is
+   * {@code .Id}: the CLI renders a template against the typed inspect object first and falls back
+   * to the <b>raw JSON map</b> when that fails, and the Go field is named {@code ID} while the JSON
+   * key is {@code Id}. So asking for the id at all moves the whole template onto the map path,
+   * where {@code {{if .State.Health}}} is an error rather than a false — a missing map key is not a
+   * zero value in Go's templates, which is the same lesson the volume label format learned from
+   * {@code index}.
+   *
+   * <p>{@code index} is what a map path has instead: {@code index .State "Health"} answers the zero
+   * value for a container that declares no check, so the {@code else} arm renders and the health
+   * reads {@code none}. Measured both ways on docker 29.7.2 — {@code running/none} for a container
+   * without a check, {@code running/healthy} for one with.
+   *
+   * <p>The two single-field spellings beside it stay: they are the typed-path forms, they are what
+   * a caller that needs one field should use, and this one is deliberately not built out of them.
+   */
+  public static final String OBSERVATION_FORMAT =
+      "{{.Id}}|{{.State.Status}}/"
+          + "{{if index .State \"Health\"}}{{(index .State \"Health\").Status}}{{else}}none{{end}}"
+          + "|{{.State.StartedAt}}";
+
+  /** One inspect answering everything an observation records — see {@link #OBSERVATION_FORMAT}. */
+  public static List<String> inspectObservation(String runtimeBinary, String name) {
+    return List.of(
+        runtimeBinary,
+        "inspect",
+        "--format",
+        OBSERVATION_FORMAT,
+        ContainersIdentifiers.requireContainerName(name));
+  }
+
   /** Stop it, leaving it restartable. */
   public static List<String> stop(String runtimeBinary, String name) {
     return List.of(runtimeBinary, "stop", ContainersIdentifiers.requireContainerName(name));

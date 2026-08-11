@@ -13,14 +13,26 @@ code is a document the code will contradict.
 
 That rule bites hardest here, because docker is this repository's subject. A suite that needed a
 daemon to say what the orchestrator does could never say it without one, so the docker seam is faked
-in tests and the real driver is proved by an integration test that opts in. The store being postgres
-costs no docker either: `testdb/EmbeddedPg` spawns zonky's real binaries as a child process — a
-maven dependency, not a container. **Never Testcontainers, never a Quarkus dev service.**
+in tests and the real driver is proved by an integration test that opts in — `ContainersRestartAdoptionIT`,
+tagged `extended`, run by `./mvnw verify -DskipITs=false` and excluded from the `-Dnative` gate
+through `qits.it.excluded-groups`. It is the one place the headline claim is really made: a
+container's docker `Id` and `StartedAt` are unchanged after a restart adopts it, and those two
+numbers only exist on a host.
 
-**One address is the whole exception.** `qits-db-core`, `qits-arch-rules` and `qits-eventstream`
-come from the platform Maven repository (`<repositories>` in the root pom), so a clone builds green
-with that repository reachable and offline once the jars are in `~/.m2`. Nothing else may follow
-them in.
+The store being postgres costs no docker either: `testdb/EmbeddedPg` spawns zonky's real binaries as
+a child process — a maven dependency, not a container. **Never Testcontainers, never a Quarkus dev
+service.**
+
+**One address is the whole exception.** `qits-db-core`, `qits-arch-rules`, `qits-eventstream` and
+`qits-auth-core` come from the platform Maven repository (`<repositories>` in the root pom), so a
+clone builds green with that repository reachable and offline once the jars are in `~/.m2`. Nothing
+else may follow them in.
+
+`qits-auth-core` is the fourth and it arrived in WP4, which is what widening that list costs: every
+route here is addressed to an owner, the owner **is** the caller, and the platform has exactly one
+answer to "who is calling". A second answer invented in this repository would be the interim static
+token the platform has a standing decision against. It brings no server and no transport —
+quarkus-oidc validates the bearer, and the jar reads the identity that validation leaves behind.
 
 ## The two invariants this repo exists for
 
@@ -46,6 +58,14 @@ exempt, including the ones that "cannot" block.
   they all write rows through the repositories in `persistence`. A query that answers "which
   containers look like mine" belongs in neither: the rows are the registry, and a listing by label
   is the reap this repo exists to remove.
+- **A docker daemon that did not answer is not a docker daemon with no such container.**
+  `DockerContainersDriver.inspect` **throws** when the call could not be made or timed out, and
+  answers empty only for a refusal that says "no such container". Its empty answer is a positive
+  statement the boot sweep settles rows on and that `delete` reads as "it is really gone" — a delete
+  that took "we could not find out" for that would settle `GONE` over a container still running,
+  which nothing would ever look at again. Every caller already treats the throw as "say nothing".
+  The listings degrade to empty with a warning instead, because an empty listing is a statement
+  about no particular container.
 - **`core/docker` is argv and process, never a docker call.** `DockerArgv` is pure functions and
   `ContainerProcess` is the shell-out; the driver that puts them together is an interface here
   (`control/ContainersDriver`) and an implementation in `service/`. That is what lets the argvs — the
@@ -53,7 +73,18 @@ exempt, including the ones that "cannot" block.
 - **The fakes are duplicated per module, not shared.** Maven has no `testFixtures`, and a test-jar
   dependency between modules that otherwise have none is the higher price. `core`'s
   `FakeContainersDriver` is the original; a module that needs one copies it. Same stance as
-  qits-workspaces' two `FakeContainerRuntime`s and qits-ci's two `FakeCiStepRunner`s.
+  qits-workspaces' two `FakeContainerRuntime`s and qits-ci's two `FakeCiStepRunner`s. **The
+  `service` copy is an `@Alternative` with no priority**, because that module ships the real driver:
+  an ordinary bean would be an ambiguous resolution and a globally enabled alternative would take
+  the daemon away from the one test that needs it, so each suite names the driver it means in its
+  profile's `getEnabledAlternatives()`.
+- **Every route is guarded, reads included** (`api/OwnerGuard`). The rest of the fleet guards its
+  writes and leaves its reads open because a person reads through the gateway; nothing here is read
+  by a person, and an inventory of running containers is as much a module's own as the containers
+  are. The owner in the path is compared against the machine token's **subject, whole** —
+  `dev-qits-ci` and `prod-qits-ci` are two owners, and that prefix is what keeps two environments
+  sharing one docker daemon apart. With the rollout gate off (the shipped default) the path owner is
+  trusted, exactly as every sibling behaves.
 - **The datasource, the persistence unit and the Flyway lineage live in `core`**, shipped as
   ordinal-100 defaults in `META-INF/microprofile-config.properties`. The app's own settings are in
   `service/src/main/resources/application.properties` at ordinal 250. Never restate one file's key

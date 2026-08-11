@@ -64,6 +64,16 @@
         <qits.db-core.version>2026.811.165001</qits.db-core.version>
         <qits.arch-rules.version>2026.811.165001</qits.arch-rules.version>
 
+        <!-- Machine identity, released out of the same libs/qits-integrations-quarkus train. It is
+             the fourth platform jar this repo takes and the one AGENTS.md's "nothing else may
+             follow them in" had to be widened for: every route of this service is addressed to an
+             owner, the owner IS the caller, and the platform already has exactly one answer to
+             "who is calling" — MachineAuth plus the rollout gate every sibling shares. A second
+             answer invented here would be the interim static token the platform has a standing
+             decision against. It brings no server and no transport: quarkus-oidc validates the
+             bearer and this jar only reads the identity that validation leaves behind. -->
+        <qits.auth-core.version>2026.811.165001</qits.auth-core.version>
+
         <!-- The platform event bus client. It is here from the scaffold rather than from the first
              event, because it brings the causation persistence trio (CausedRow, CausationStamp,
              @Uncaused) that every row this service writes has to decide about — see ArchRulesTest —
@@ -88,6 +98,14 @@
         <!-- Integration tests run against a PACKAGED artifact, so a plain `mvn verify` skips them.
              The `native` profile in service/pom.xml flips it. -->
         <skipITs>true</skipITs>
+
+        <!-- JUnit tags failsafe must NOT run, empty by default so `-DskipITs=false` still means
+             "run everything". Only the `native` profile sets it, to `extended`: that build wants
+             the @QuarkusIntegrationTest against the binary it just compiled, while the
+             docker-backed proof (ContainersRestartAdoptionIT) is an infrastructure test with
+             nothing to say about native-image. It is still run, unchanged, by `-DskipITs=false`.
+             Same shape and same property name as qits-ci. -->
+        <qits.it.excluded-groups/>
 
         <!-- Surefire's @{argLine} has no value unless something (jacoco/quarkus) sets it. -->
         <argLine/>
@@ -134,6 +152,11 @@
                 <groupId>${project.groupId}</groupId>
                 <artifactId>qits-arch-rules</artifactId>
                 <version>${qits.arch-rules.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>${project.groupId}</groupId>
+                <artifactId>qits-auth-core</artifactId>
+                <version>${qits.auth-core.version}</version>
             </dependency>
             <!-- The reactor's own modules, so `service` depends on them version-less. -->
             <dependency>

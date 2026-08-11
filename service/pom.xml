@@ -60,6 +60,27 @@
             <artifactId>qits-eventstream</artifactId>
         </dependency>
         <dependency>
+            <!-- Machine identity: MachineAuth's rollout gate, and the SecurityIdentity every route
+                 here reads its caller's own name off. It ships the two config keys the gate needs
+                 at ordinal 100, which is why nothing restates them in application.properties. -->
+            <groupId>${project.groupId}</groupId>
+            <artifactId>qits-auth-core</artifactId>
+        </dependency>
+        <dependency>
+            <!-- Bearer validation against qits-idp. qits-auth-core deliberately does NOT bring it:
+                 validating a token is each service's own choice of extension and config, and that
+                 jar only reads the identity the validation leaves behind. With the rollout gate off
+                 there is no tenant at all, so a clone-alone `./mvnw verify` reaches no issuer. -->
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-oidc</artifactId>
+        </dependency>
+        <dependency>
+            <!-- SecurityIdentity itself. Named rather than taken transitively, because this
+                 module's own code reads one: the owner in every path is the token's subject. -->
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-security</artifactId>
+        </dependency>
+        <dependency>
             <!-- OTLP export to qits-observability. The extension instruments the process; the
                  endpoint and protocol in application.properties are what make it arrive, since the
                  defaults are gRPC to localhost:4317 and the receiver speaks HTTP/protobuf. -->
@@ -75,6 +96,16 @@
         <dependency>
             <groupId>io.rest-assured</groupId>
             <artifactId>rest-assured</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- The test-only token issuer. MachineGuardTest signs its own RS256 tokens with the
+                 key pair in src/test/resources and has quarkus-oidc verify them locally, so the
+                 whole enforcement path is exercised — signature, issuer, audience, then this
+                 service's own owner guard — with no qits-idp to reach. Nothing in src/main mints a
+                 token. -->
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-smallrye-jwt-build</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>
@@ -139,10 +170,12 @@
                 <artifactId>maven-surefire-plugin</artifactId>
             </plugin>
             <plugin>
-                <!-- Bound with no IT to run yet: the packaged-surface test is a later work package,
-                     and skipITs=true is the parent's default so a clone-alone `mvn verify` skips
-                     this either way. It is wired now so the `native` profile below has a gate to
-                     flip rather than a plugin to add. -->
+                <!-- ContainersPackagedSurfaceIT and the docker-backed proof
+                     (ContainersRestartAdoptionIT) bind here. skipITs=true is the parent's default,
+                     so a clone-alone `mvn verify` is green with no docker; `-DskipITs=false` runs
+                     them both and the docker one self-skips (JUnit Assumptions) when the daemon is
+                     unreachable. The `native` profile flips skipITs too and narrows to the packaged
+                     IT via qits.it.excluded-groups. -->
                 <artifactId>maven-failsafe-plugin</artifactId>
                 <executions>
                     <execution>
@@ -153,6 +186,7 @@
                     </execution>
                 </executions>
                 <configuration>
+                    <excludedGroups>${qits.it.excluded-groups}</excludedGroups>
                     <systemPropertyVariables>
                         <!-- How @QuarkusIntegrationTest finds the compiled binary in a `-Dnative`
                              build. The name is `quarkus.package.output-name` from
@@ -193,6 +227,7 @@
                 <quarkus.package.jar.enabled>false</quarkus.package.jar.enabled>
                 <skipITs>false</skipITs>
                 <quarkus.native.enabled>true</quarkus.native.enabled>
+                <qits.it.excluded-groups>extended</qits.it.excluded-groups>
             </properties>
         </profile>
     </profiles>

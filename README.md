@@ -9,7 +9,8 @@ labels, and its own answer to what happens to a running container when the modul
 service is the one place that answers: **a durable row is written before the container is started, a
 restart adopts what is still running, and no code path removes a container that no row names.**
 
-    ./mvnw verify     # a clone of this repo alone builds and tests green — no monorepo, no docker
+    ./mvnw verify                  # a clone alone, green — no monorepo, no docker, no credentials
+    ./mvnw verify -DskipITs=false  # adds the packaged surface, and the real-docker adoption proof
 
 ## Layout
 
@@ -17,7 +18,7 @@ restart adopts what is still running, and no code path removes a container that 
 |---|---|
 | `core/` | The domain: the registry rows, the workload spec and its lifecycle policies, the docker seam. A library jar. It owns the datasource, the persistence unit and the Flyway lineage. |
 | `client/` | What a consumer depends on to **call** this service: the wire records and the HttpClient behind them. It depends on `core` **not at all**. |
-| `service/` | The deployable: the REST surface under `/containers/api`, the real docker driver, the sweeps. |
+| `service/` | The deployable: the REST surface under `/containers/api`, the real docker driver (`dockerhost/`), the machine guard, the boot steps. |
 
 The directories are short and the artifactIds are namespaced (`qits-containers-*`): generic
 coordinates like `eu.wohlben:core` would collide in the shared `~/.m2` that every workspace
@@ -63,18 +64,47 @@ than a daemon.
 **`destroyAll` is what a consumer's boot reap becomes**: an owner's own rows, filtered by
 `createdBefore`. Never a listing by label — that is the reap this repository exists to remove.
 
+## The surface
+
+Everything lives under `/containers/api`, and a **place** is `{owner}/{workload}/{ref}`.
+
+    PUT    /containers/{owner}/{workload}/{ref}      {spec, policy, recreate}  -> the place
+    GET    /containers/{owner}/{workload}/{ref}      the place, 404 only when no row names it
+    GET    /containers/{owner}[/{workload}]          this owner's places, from the ROWS
+    POST   /containers/{owner}/{workload}/{ref}/stop | /touch
+    GET    /containers/{owner}/{workload}/{ref}/logs?tail=N     bounded, and works while EXITED
+    DELETE /containers/{owner}/{workload}/{ref}?volumes=&logs=  idempotent; the tail comes back
+    DELETE /containers/{owner}/{workload}?createdBefore=<ISO>   the boot reap; the instant is REQUIRED
+    PUT|GET|DELETE /volumes/{owner}/{name}
+
+One envelope answers about a place: `{id, containerName, state:{desired,observed}, endpoint:{…},
+specHash, created}`. `endpoint.proxy` is null today and is there because the data plane arrives
+behind it. Errors are typed: 409 `SPEC_CONFLICT` for a recreate a run-once policy cannot answer,
+409 `IMAGE_MISSING` for an image nothing published, 400 `INVALID` for a value that will not go into
+an argv. **A failed read is a 5xx and never a 404** — a caller that read 404 would conclude its
+workload was never started, and start a second one.
+
+**`createdBefore` being required is the boot reap's whole shape.** An owner passes the instant it
+came up, so what it started afterwards — including while the sweep runs — is not in the set.
+
+### Who may call
+
+Every route, reads included. The rest of the platform guards its writes and leaves its reads open
+because a person reads through the gateway; nothing here is read by a person, and an inventory of
+running containers is as much a module's own as the containers are.
+
+The `{owner}` in the path must be the machine token's **subject, whole**: qits-idp mints
+`dev-qits-ci` and `prod-qits-ci` as two client ids, and that environment prefix is exactly what
+keeps two environments sharing one docker daemon out of each other's rows. Until the platform-wide
+gate `qits.auth.machine.required` is on — it ships off, as it does everywhere — the path owner is
+trusted and no bearer is needed.
+
 ## What is deliberately *not* here yet
 
-It builds, boots, migrates its schema, serves its health probe and reconciles its registry. What is
-missing is everything that makes it reachable and everything that makes it real:
-
-- **The real docker driver.** The seam (`control/ContainersDriver`) and its scripted fake exist, and
-  a build that wires no implementation gets `UnwiredContainersDriver`, which refuses every call
-  rather than quietly answering "done".
-- **The REST surface.** `quarkus.rest.path` is set and no resource answers under it, so nothing
-  outside this process can reach the registry yet.
 - **The client.** The module exists so the boundary is stated before there is code to bend it.
 - **The data plane.** The reverse tunnels two other modules carry today centralize here eventually.
+- **The consumers.** qits-ci, qits-workspaces and qits-projects still run their own containers; the
+  point of this service is that they stop, one at a time.
 
 ## What a deployment must set
 
@@ -87,6 +117,27 @@ missing is everything that makes it reachable and everything that makes it real:
 containers may exist. An orchestrator that came up on an empty store it invented would see every
 running container as named by no row — which is precisely the state the adoption rule exists to
 prevent it from acting on.
+
+Everything else has a shipped default and a deployment overrides what it means to:
+`QITS_AUTH_MACHINE_REQUIRED=true` with `QITS_AUTH_MACHINE_AUDIENCE=<env>-qits-containers` turns the
+gate on; `QITS_CONTAINERS_INSTANCE` distinguishes two instances in `docker ps`;
+`QITS_CONTAINERS_NETWORK` and `QITS_CONTAINERS_SHARED_VOLUMES` name what the boot step makes sure
+of. The container needs the docker socket, and it is the deployment that grants it — nothing here
+mounts one for itself.
+
+### What a boot does, in order
+
+1. **`SharedResources`** makes the three shared volumes (`qits_shared_*`) and asks whether
+   `qits-net` is there. **It never creates a network**: one invented here would be a network no
+   other module's containers are on, and a bridge cannot be created on a swarm host at all.
+2. **`BootSweep`** adopts what is still running, settles what stopped per policy, and replays a
+   delete that never finished.
+3. **`ContainerObserver`** starts its ticker — last, by CDI priority, so no observation pass meets
+   an in-flight row before the sweep has decided about it.
+
+None of the three fails a boot. A host that has just rebooted has this service up before its docker,
+and an orchestrator that refused to start because it could not reach docker would be one that could
+not be deployed to fix docker.
 
 ### The health probe
 
