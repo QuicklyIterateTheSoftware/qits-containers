@@ -39,8 +39,16 @@ exempt, including the ones that "cannot" block.
 ## Conventions
 
 - `eu.wohlben.qits.containers.*`, split across three maven modules with disjoint sub-packages, so
-  there is no split package. `core` owns the root and `entity`; `client` owns `client`; `service`
-  owns the adapters.
+  there is no split package. `core` owns the root, `spec`, `docker`, `control` and `entity`;
+  `client` owns `client`; `service` owns the adapters.
+- **`core/docker` is argv and process, never a docker call.** `DockerArgv` is pure functions and
+  `ContainerProcess` is the shell-out; the driver that puts them together is an interface here
+  (`control/ContainersDriver`) and an implementation in `service/`. That is what lets the argvs — the
+  sandbox itself — be asserted element for element with no daemon anywhere.
+- **The fakes are duplicated per module, not shared.** Maven has no `testFixtures`, and a test-jar
+  dependency between modules that otherwise have none is the higher price. `core`'s
+  `FakeContainersDriver` is the original; a module that needs one copies it. Same stance as
+  qits-workspaces' two `FakeContainerRuntime`s and qits-ci's two `FakeCiStepRunner`s.
 - **The datasource, the persistence unit and the Flyway lineage live in `core`**, shipped as
   ordinal-100 defaults in `META-INF/microprofile-config.properties`. The app's own settings are in
   `service/src/main/resources/application.properties` at ordinal 250. Never restate one file's key

@@ -43,10 +43,13 @@ Two things are deliberately outside it:
 
 ## What is deliberately *not* here yet
 
-This repository is a scaffold. It builds, boots, migrates its schema and serves its health probe;
-everything below is a later work package, in roughly this order:
+It builds, boots, migrates its schema and serves its health probe, and `core` carries the
+primitives: the spec and policy vocabulary, the label namespace, the bounded process shell-out, the
+pure argv renderer and the docker seam. Nothing calls docker yet — everything below is a later work
+package, in roughly this order:
 
-- **The docker driver and the spec vocabulary.** No `ProcessBuilder`, no argv, no labels yet.
+- **The real docker driver.** The seam (`control/ContainersDriver`) and its scripted fake exist; the
+  implementation that shells the CLI does not.
 - **The REST surface.** `quarkus.rest.path` is set and no resource answers under it.
 - **The registry behaviour** — the boot sweep that adopts, the observer that reconciles, the policy
   sweeps.
