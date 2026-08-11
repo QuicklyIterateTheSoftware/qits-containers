@@ -41,18 +41,38 @@ Two things are deliberately outside it:
 - **Anything a container talks to.** Containers dial out to stable DNS aliases and re-dial on their
   own, which is what makes a restart of this service invisible to traffic that is already flowing.
 
+## The registry, and what a restart does
+
+`core/control` is the state machine, and it is proved end to end against a scripted driver rather
+than a daemon.
+
+- **`ContainerRegistry`** — `ensure`, `stop`, `touch`, `logs`, `delete`, `destroyAll`. Every one of
+  them writes the row before it calls docker, and no transaction spans a docker call. `ensure`
+  stores the spec **without its environment** and hashes a canonical form **with** it, so a rotated
+  credential is a change the registry can see without ever having stored one. A run docker refuses
+  is re-inspected: a container carrying the row's own name is a previous attempt that died before
+  recording itself, and it is adopted rather than replaced.
+- **`BootSweep`** — a restart adopts what is still running, settles what stopped according to its
+  policy, and replays a delete that never finished. Docker being down at boot is a warning and not a
+  failed start.
+- **`ContainerObserver`** — one ticker, one `ct-worker`, rows only. A running workload is demoted
+  after two consecutive passes agree its container is gone; one that comes back recovers, with the
+  original failure text kept under the recovery. `IdleSweep`, `VolumeReconcile`, `MaxAgeGc` and
+  `RowPrune` run on the same worker, so there is one concurrency model rather than five.
+
+**`destroyAll` is what a consumer's boot reap becomes**: an owner's own rows, filtered by
+`createdBefore`. Never a listing by label — that is the reap this repository exists to remove.
+
 ## What is deliberately *not* here yet
 
-It builds, boots, migrates its schema and serves its health probe, and `core` carries the
-primitives: the spec and policy vocabulary, the label namespace, the bounded process shell-out, the
-pure argv renderer and the docker seam. Nothing calls docker yet — everything below is a later work
-package, in roughly this order:
+It builds, boots, migrates its schema, serves its health probe and reconciles its registry. What is
+missing is everything that makes it reachable and everything that makes it real:
 
-- **The real docker driver.** The seam (`control/ContainersDriver`) and its scripted fake exist; the
-  implementation that shells the CLI does not.
-- **The REST surface.** `quarkus.rest.path` is set and no resource answers under it.
-- **The registry behaviour** — the boot sweep that adopts, the observer that reconciles, the policy
-  sweeps.
+- **The real docker driver.** The seam (`control/ContainersDriver`) and its scripted fake exist, and
+  a build that wires no implementation gets `UnwiredContainersDriver`, which refuses every call
+  rather than quietly answering "done".
+- **The REST surface.** `quarkus.rest.path` is set and no resource answers under it, so nothing
+  outside this process can reach the registry yet.
 - **The client.** The module exists so the boundary is stated before there is code to bend it.
 - **The data plane.** The reverse tunnels two other modules carry today centralize here eventually.
 

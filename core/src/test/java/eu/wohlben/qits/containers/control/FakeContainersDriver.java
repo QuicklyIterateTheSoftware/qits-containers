@@ -30,7 +30,21 @@ import java.util.concurrent.ConcurrentHashMap;
  * before a run, logs before a removal, an adopt before anything else at boot — and order is not
  * visible in return values. Every method appends one {@code kind:target} line and {@link #calls()}
  * is what a test asserts against.
+ *
+ * <p><b>It is a bean as well as a plain class</b>, and both uses are live. {@code core} ships no
+ * implementation of the seam at all, so an ordinary {@code @ApplicationScoped} is enough to make it
+ * the one a {@code @QuarkusTest} injects — no {@code @Mock}, no alternative, no priority. The plain
+ * JUnit tests still {@code new} it. Read its state through its METHODS in a {@code @QuarkusTest}:
+ * the injected reference is a CDI client proxy, and a field read on a proxy sees the proxy's fields
+ * rather than the bean's.
+ *
+ * <p><b>Two hooks exist for claims that cannot be made any other way.</b> {@link #duringRun} runs
+ * something at the instant {@code run} is entered, which is how "the row already existed, and said
+ * PENDING, before docker was asked for anything" becomes an assertion rather than an inference from
+ * ordering. {@link #scriptDown} makes every container-touching call throw, which is a docker daemon
+ * that is not there — the state a boot sweep has to survive without failing a boot.
  */
+@jakarta.enterprise.context.ApplicationScoped
 public class FakeContainersDriver implements ContainersDriver {
 
   private final List<String> calls = Collections.synchronizedList(new ArrayList<>());
@@ -47,6 +61,8 @@ public class FakeContainersDriver implements ContainersDriver {
   private volatile OpResult nextPull = new OpResult(true, null);
   private volatile boolean networkPresent = true;
   private volatile String selfId = "";
+  private volatile String down;
+  private volatile java.util.function.Consumer<String> duringRun;
 
   public void reset() {
     calls.clear();
@@ -61,6 +77,8 @@ public class FakeContainersDriver implements ContainersDriver {
     nextPull = new OpResult(true, null);
     networkPresent = true;
     selfId = "";
+    down = null;
+    duringRun = null;
   }
 
   /** Every driver call in arrival order, tagged {@code kind:target}. */
@@ -120,6 +138,31 @@ public class FakeContainersDriver implements ContainersDriver {
     selfId = id;
   }
 
+  /**
+   * Every container-touching call throws from now on — a docker daemon that is not there, which is
+   * the ordinary state of a host that has just rebooted. {@code null} puts it back.
+   */
+  public void scriptDown(String message) {
+    down = message;
+  }
+
+  /**
+   * Run something at the instant {@code run} is entered, before anything is recorded. It is how a
+   * test says "the registry row was already committed, and said PENDING, when docker was asked" —
+   * a claim about ORDER that no return value carries.
+   */
+  public void duringRun(java.util.function.Consumer<String> hook) {
+    duringRun = hook;
+  }
+
+  /** The daemon's refusal to answer, if a test scripted one. */
+  private void refuseIfDown(String what) {
+    String message = down;
+    if (message != null) {
+      throw new IllegalStateException("docker is not answering (" + what + "): " + message);
+    }
+  }
+
   @Override
   public Started run(
       ContainerSpec spec,
@@ -127,6 +170,11 @@ public class FakeContainersDriver implements ContainersDriver {
       Map<String, String> labels,
       LifecyclePolicy policy,
       Duration timeout) {
+    java.util.function.Consumer<String> hook = duringRun;
+    if (hook != null) {
+      hook.accept(name);
+    }
+    refuseIfDown("run " + name);
     calls.add("run:" + name);
     ranSpecs.add(spec);
     if (nextRun.started()) {
@@ -137,25 +185,33 @@ public class FakeContainersDriver implements ContainersDriver {
 
   @Override
   public Optional<Observed> inspect(String name, Duration timeout) {
+    refuseIfDown("inspect " + name);
     calls.add("inspect:" + name);
     return Optional.ofNullable(containers.get(name));
   }
 
   @Override
   public OpResult stop(String name, Duration timeout) {
+    refuseIfDown("stop " + name);
     calls.add("stop:" + name);
     return nextOp;
   }
 
   @Override
   public OpResult remove(String name, Duration timeout) {
+    refuseIfDown("remove " + name);
     calls.add("remove:" + name);
-    containers.remove(name);
+    // A remove that reports failure did not remove: the container is still there afterwards, which
+    // is what lets a test say what the registry does when docker cannot perform one.
+    if (nextOp.ok()) {
+      containers.remove(name);
+    }
     return nextOp;
   }
 
   @Override
   public LogTail logsTail(String name, int lines, Duration timeout, int maxChars) {
+    refuseIfDown("logs " + name);
     calls.add("logs:" + name);
     String text = logs.getOrDefault(name, "");
     if (text.length() <= maxChars) {

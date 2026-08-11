@@ -1,0 +1,13 @@
+-- The second half of the policy vocabulary on the row.
+--
+-- V1 recorded idle_after_s and stopped there, because it was written before the sweeps were. A
+-- LifecyclePolicy carries two durations, and the EPHEMERAL one — maxAge, how long a run-once
+-- container may sit around after it exits so its logs can be read — had nowhere to land. A policy
+-- value the sweeps read has to be ON THE ROW: the caller states it once at ensure time, and a
+-- restart that could not read it back would collect nothing, forever, with no error anywhere to say
+-- why.
+--
+-- Nullable, no backfill, no default. Null means what it means on LifecyclePolicy: no sweep of that
+-- kind. Every row written before this column existed was written by a service that had no max-age
+-- sweep, so null is the honest value for all of them rather than a gap somebody has to fill.
+alter table ct_container add column max_age_s bigint;

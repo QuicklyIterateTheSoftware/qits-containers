@@ -61,8 +61,8 @@
              postgresql datasource is missing a line of that block. They move together: the rule
              names the driver as a string, so a driver that moved without the rule would pass a
              build it should fail. -->
-        <qits.db-core.version>2026.811.152803</qits.db-core.version>
-        <qits.arch-rules.version>2026.811.152803</qits.arch-rules.version>
+        <qits.db-core.version>2026.811.165001</qits.db-core.version>
+        <qits.arch-rules.version>2026.811.165001</qits.arch-rules.version>
 
         <!-- The platform event bus client. It is here from the scaffold rather than from the first
              event, because it brings the causation persistence trio (CausedRow, CausationStamp,

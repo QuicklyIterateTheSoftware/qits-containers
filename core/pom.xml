@@ -48,14 +48,30 @@
             <artifactId>quarkus-jdbc-postgresql</artifactId>
         </dependency>
         <dependency>
-            <!-- RUNTIME scope, because nothing here imports it: the datasource block names
-                 PatientPgDriver as a string, so the class has to be on the runtime classpath of
-                 whatever ships this jar. It is what keeps a request WAITING while postgres comes
-                 back instead of failing at once. DbRetry, the other half, arrives at compile scope
-                 in the commit that gives this module a write to wrap. -->
+            <!-- COMPILE scope now, and both halves of the pair are why. PatientPgDriver is named as
+                 a string by the datasource block, so the class has to be on the runtime classpath
+                 of whatever ships this jar; it keeps a request WAITING while postgres comes back
+                 instead of failing at once. DbRetry is the other half and it IS imported since this
+                 module gained writes to wrap: every state transition in `control` is a
+                 DbRetry.inNewTx and every read is a DbRetry.call, so a connection lost mid-sweep
+                 costs a pause rather than a row that stops describing a live container. -->
             <groupId>${project.groupId}</groupId>
             <artifactId>qits-db-core</artifactId>
-            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <!-- The causation persistence trio — CausedRow, CausationStamp, @Uncaused — which every
+                 entity here has to decide about and ArchRulesTest makes mandatory. Three
+                 jakarta-persistence-shaped types with no publish, no subscribe and no wire in them,
+                 which is why taking the jar here is a narrowing of the module boundary rather than
+                 a hole in it: no listener, no publisher and no QitsEventBus may appear in `core`.
+
+                 It is paid for in the suite rather than for free: the jar brings its own datasource,
+                 persistence unit and Flyway lineage, and dark is not absent — so this module's own
+                 @QuarkusTest classes owe the outbox a database (testdb/EmbeddedPgConfigSource) and
+                 keep the bus dark in src/test/resources/application.properties. The same contract
+                 qits-ci's domain module honours. -->
+            <groupId>${project.groupId}</groupId>
+            <artifactId>qits-eventstream</artifactId>
         </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
@@ -69,12 +85,52 @@
             <artifactId>flyway-database-postgresql</artifactId>
         </dependency>
         <dependency>
-            <!-- This module's suite is PLAIN JUnit, never @QuarkusTest: the primitives here are pure
-                 functions and a scripted fake, so nothing needs an application to boot. The
-                 dependency is the Quarkus one because that is what the platform BOM manages
-                 junit-jupiter through. -->
+            <!-- This module's suite is BOTH KINDS. The primitives — the argv renderer, the
+                 identifiers, the scripted fake — are pure functions and stay plain JUnit. The
+                 registry, the boot sweep and the observer are a state machine over real rows, and
+                 the only honest way to say what they do is to boot the application against a real
+                 database, so those are @QuarkusTest. The dependency is the Quarkus one either way,
+                 because that is what the platform BOM manages junit-jupiter through. -->
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- The store this module's @QuarkusTest classes boot against. Zonky spawns real
+                 postgres binaries as a child process — a maven dependency rather than a container —
+                 which is what keeps the clone-alone, docker-free rule true in the one repository
+                 where docker is the subject. testdb/EmbeddedPg + EmbeddedPgConfigSource in the test
+                 sources hand the running instance to Quarkus, and they are a COPY of the pair in
+                 `service` naming DIFFERENT databases: the house duplicate-not-share stance, and two
+                 modules meaning one database is exactly what the different names prevent. -->
+            <groupId>io.zonky.test</groupId>
+            <artifactId>embedded-postgres</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- Named per architecture on purpose: the binaries are separate artifacts and zonky
+                 picks one at run time, so an unnamed arch fails in the middle of a suite rather
+                 than during resolution. -->
+            <groupId>io.zonky.test.postgres</groupId>
+            <artifactId>embedded-postgres-binaries-linux-amd64</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.zonky.test.postgres</groupId>
+            <artifactId>embedded-postgres-binaries-linux-arm64v8</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- The musl build, for the platform's own CI: the step container is Alpine, where the
+                 glibc binaries above cannot start and the whole suite dies at the config source
+                 naming zonky. -->
+            <groupId>io.zonky.test.postgres</groupId>
+            <artifactId>embedded-postgres-binaries-linux-amd64-alpine</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.zonky.test.postgres</groupId>
+            <artifactId>embedded-postgres-binaries-darwin-arm64v8</artifactId>
             <scope>test</scope>
         </dependency>
     </dependencies>
