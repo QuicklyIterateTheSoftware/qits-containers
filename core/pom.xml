@@ -1,0 +1,90 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>eu.wohlben.qits</groupId>
+        <artifactId>qits-containers</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <!-- The domain: the registry rows, the workload spec and its lifecycle policies, and the docker
+         seam the service implements. A plain library jar.
+
+         It owns its OWN named datasource + persistence unit + Flyway lineage — its own postgres
+         database, provisioned by the platform's `resources:` mechanism before the process boots (see
+         src/main/resources/META-INF/microprofile-config.properties). The module is
+         extraction-shaped from day one, which is the arrangement every sibling repo uses.
+
+         The directory is `core/` while the artifactId is `qits-containers-core`: generic
+         coordinates like `eu.wohlben:core` would collide in the shared ~/.m2 that every workspace
+         container mounts. -->
+    <artifactId>qits-containers-core</artifactId>
+    <name>qits-containers :: core</name>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-arc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-hibernate-orm-panache</artifactId>
+        </dependency>
+        <dependency>
+            <!-- ObjectMapper bean availability for consumers (no REST needed). The spec is stored
+                 as JSON, so this module serializes without the service being involved. -->
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-jackson</artifactId>
+        </dependency>
+        <dependency>
+            <!-- The module's store: a postgres role and database of this application's own, created
+                 before the container starts and handed over as QITS_RESOURCE_DB_URL / _USERNAME /
+                 _PASSWORD. -->
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-jdbc-postgresql</artifactId>
+        </dependency>
+        <dependency>
+            <!-- RUNTIME scope, because nothing here imports it: the datasource block names
+                 PatientPgDriver as a string, so the class has to be on the runtime classpath of
+                 whatever ships this jar. It is what keeps a request WAITING while postgres comes
+                 back instead of failing at once. DbRetry, the other half, arrives at compile scope
+                 in the commit that gives this module a write to wrap. -->
+            <groupId>${project.groupId}</groupId>
+            <artifactId>qits-db-core</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-flyway</artifactId>
+        </dependency>
+        <dependency>
+            <!-- Flyway 10 split its database support out of the core: without this module Flyway
+                 refuses a postgres url with "no database found to handle". It sits here because
+                 this module owns the lineage. -->
+            <groupId>org.flywaydb</groupId>
+            <artifactId>flyway-database-postgresql</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <!-- The consuming Quarkus app needs an index of this jar's beans and entities;
+                     without it `service` boots with none of them, and the failure is a runtime
+                     "unknown entity" rather than a build error. -->
+                <groupId>io.smallrye</groupId>
+                <artifactId>jandex-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

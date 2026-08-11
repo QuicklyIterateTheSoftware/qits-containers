@@ -1,0 +1,199 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>eu.wohlben.qits</groupId>
+        <artifactId>qits-containers</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <!-- The deployable: the REST surface under /containers/api, the real docker driver behind
+         `core`'s seam, and the sweeps that keep rows and reality in step.
+
+         A DEPLOYABLE APP, not a library jar — see `<packaging>quarkus</packaging>` below.
+
+         EMPTY BUT BOOTING in this commit. It carries the config, the health surface and the test
+         baseline; the routes and the driver are their own work packages. -->
+    <artifactId>qits-containers-service</artifactId>
+    <name>qits-containers :: service</name>
+    <packaging>quarkus</packaging>
+
+    <dependencies>
+        <dependency>
+            <groupId>${project.groupId}</groupId>
+            <artifactId>qits-containers-core</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-arc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-rest-jackson</artifactId>
+        </dependency>
+        <dependency>
+            <!-- The API document for the orchestration surface, served under this service's own
+                 non-application root. -->
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-smallrye-openapi</artifactId>
+        </dependency>
+        <dependency>
+            <!-- /containers/q/health/ready — what a deployment gates its cutover on. It also brings
+                 the database into the gate for free: quarkus-agroal registers a readiness check per
+                 datasource as soon as a health extension is present, so a process that booted and
+                 cannot reach its registry is red rather than green. -->
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-smallrye-health</artifactId>
+        </dependency>
+        <dependency>
+            <!-- The platform event bus client, taken from the scaffold on purpose: it carries the
+                 causation persistence trio every row here has to decide about (ArchRulesTest makes
+                 the decision mandatory) and its own datasource, persistence unit and Flyway
+                 lineage. It is dark in %dev and %test — see application.properties — and dark is
+                 not absent: the datasource still opens and still migrates, which is why the suite
+                 owes it a database. -->
+            <groupId>${project.groupId}</groupId>
+            <artifactId>qits-eventstream</artifactId>
+        </dependency>
+        <dependency>
+            <!-- OTLP export to qits-observability. The extension instruments the process; the
+                 endpoint and protocol in application.properties are what make it arrive, since the
+                 defaults are gRPC to localhost:4317 and the receiver speaks HTTP/protobuf. -->
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-opentelemetry</artifactId>
+        </dependency>
+
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-junit5</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.rest-assured</groupId>
+            <artifactId>rest-assured</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- The platform's shared rules: the causation-row completeness guard and the
+                 datasource baseline. A datasource that lost a line of the three-line block, or an
+                 entity that skipped the causation decision, fails this build rather than a review.
+                 It brings the ArchUnit engine along, so enabling the rules stays one dependency. -->
+            <groupId>${project.groupId}</groupId>
+            <artifactId>qits-arch-rules</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- The store every @QuarkusTest here boots against. Zonky spawns real postgres
+                 binaries as a child process — a maven dependency rather than a container — which is
+                 what keeps the clone-alone, docker-free rule true. -->
+            <groupId>io.zonky.test</groupId>
+            <artifactId>embedded-postgres</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- Named per architecture on purpose: the binaries are separate artifacts and zonky
+                 picks one at run time, so an unnamed arch fails in the middle of a suite rather
+                 than during resolution. -->
+            <groupId>io.zonky.test.postgres</groupId>
+            <artifactId>embedded-postgres-binaries-linux-amd64</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.zonky.test.postgres</groupId>
+            <artifactId>embedded-postgres-binaries-linux-arm64v8</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <!-- The musl build, for the platform's own CI: the step container is Alpine, where the
+                 glibc binaries above cannot start and the whole suite dies at the config source
+                 naming zonky. -->
+            <groupId>io.zonky.test.postgres</groupId>
+            <artifactId>embedded-postgres-binaries-linux-amd64-alpine</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.zonky.test.postgres</groupId>
+            <artifactId>embedded-postgres-binaries-darwin-arm64v8</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <!-- This module is the DEPLOYABLE, and `<packaging>quarkus</packaging>` above is
+                     what says so: it binds generate-code, generate-code-tests and build into the
+                     lifecycle, so augmentation is not an execution someone can misplace. -->
+                <groupId>${quarkus.platform.group-id}</groupId>
+                <artifactId>quarkus-maven-plugin</artifactId>
+                <extensions>true</extensions>
+            </plugin>
+            <plugin>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <!-- Bound with no IT to run yet: the packaged-surface test is a later work package,
+                     and skipITs=true is the parent's default so a clone-alone `mvn verify` skips
+                     this either way. It is wired now so the `native` profile below has a gate to
+                     flip rather than a plugin to add. -->
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+                <configuration>
+                    <systemPropertyVariables>
+                        <!-- How @QuarkusIntegrationTest finds the compiled binary in a `-Dnative`
+                             build. The name is `quarkus.package.output-name` from
+                             application.properties, NOT maven's finalName — with an output-name
+                             set, ${project.build.finalName}-runner is a path that does not exist
+                             and failsafe would silently launch nothing. The two spellings move
+                             together. -->
+                        <native.image.path>${project.build.directory}/qits-containers</native.image.path>
+                        <!-- Launch the packaged app on a free HTTP port. 8081 is the platform's own
+                             npm registry on the deployment host, and surefire's last Quarkus
+                             instance can still hold whatever it used. 0 is understood by the
+                             launcher: it reads the actual port back out of the startup line. -->
+                        <quarkus.http.test-port>0</quarkus.http.test-port>
+                        <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>io.smallrye</groupId>
+                <artifactId>jandex-maven-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+
+    <profiles>
+        <!-- GraalVM native build: `-Dnative` turns the fast-jar off and the native image on. It
+             lives in THIS module because only this module is an application. skipITs flips with it,
+             so the build runs the packaged-surface tests against the binary it just produced rather
+             than packaging one nobody starts. -->
+        <profile>
+            <id>native</id>
+            <activation>
+                <property>
+                    <name>native</name>
+                </property>
+            </activation>
+            <properties>
+                <quarkus.package.jar.enabled>false</quarkus.package.jar.enabled>
+                <skipITs>false</skipITs>
+                <quarkus.native.enabled>true</quarkus.native.enabled>
+            </properties>
+        </profile>
+    </profiles>
+</project>

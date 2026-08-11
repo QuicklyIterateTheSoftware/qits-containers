@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>eu.wohlben.qits</groupId>
+        <artifactId>qits-containers</artifactId>
+        <version>1.0.0-SNAPSHOT</version>
+        <relativePath>../pom.xml</relativePath>
+    </parent>
+
+    <!-- What a consumer depends on to CALL this service: the wire records, the four-outcome result
+         and the HttpClient behind them.
+
+         IT DOES NOT DEPEND ON `core`, AND THAT IS THE POINT OF THE MODULE. A caller wants a few
+         records and a client; `core` carries entities, a Flyway lineage and datasource defaults at
+         ordinal 100, and every one of those would arrive in qits-ci, qits-workspaces and
+         qits-projects the day they depend on this. The wire types are restated here rather than
+         shared, which is the same trade the poms make with their duplicated versions.
+
+         EMPTY IN THIS COMMIT. The scaffold ships the module so the reactor shape is settled and the
+         boundary is stated before there is code to bend it; the client itself is its own work
+         package. -->
+    <artifactId>qits-containers-client</artifactId>
+    <name>qits-containers :: client</name>
+
+    <build>
+        <plugins>
+            <plugin>
+                <artifactId>maven-compiler-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <artifactId>maven-surefire-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>
