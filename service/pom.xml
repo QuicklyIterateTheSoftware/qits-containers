@@ -50,6 +50,21 @@
             <artifactId>quarkus-smallrye-health</artifactId>
         </dependency>
         <dependency>
+            <!-- The data plane's control socket. The dial-back that carries the bytes is a RAW
+                 Vert.x route and deliberately not this extension: io.quarkus.websockets.next
+                 .Connection offers sendBinary(Buffer) and no writeQueueFull/drainHandler at all, and
+                 a byte tunnel with no backpressure signal is an unbounded heap buffer. What the
+                 extension is here for is the control plane — one endpoint, two frame names — where
+                 the framing is small and the lifecycle callbacks are the whole value.
+
+                 It also brings the one property the gate had to be shaped around: an endpoint is
+                 registered at augmentation and cannot be conditionally unregistered, so with
+                 qits.containers.proxy.enabled off the socket refuses at open rather than being
+                 absent. TunnelGateTest asserts exactly that. -->
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-websockets-next</artifactId>
+        </dependency>
+        <dependency>
             <!-- The platform event bus client, taken from the scaffold on purpose: it carries the
                  causation persistence trio every row here has to decide about (ArchRulesTest makes
                  the decision mandatory) and its own datasource, persistence unit and Flyway

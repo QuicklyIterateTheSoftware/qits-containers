@@ -691,6 +691,32 @@ public class ContainerRegistry {
   }
 
   /**
+   * The live place a row id names, or empty when no live row carries it.
+   *
+   * <p>Addressed by row id rather than by owner/workload/ref because the caller is the data plane: a
+   * container dialling home knows the id this service minted for it and nothing else, and the whole
+   * point of the id is that it names one place without the caller having to restate the three
+   * segments it was created under.
+   *
+   * <p><b>Empty is "no live row", never "could not ask"</b> — the same rule {@link #status} states,
+   * and it matters more here: the answer admits or refuses a control connection, so an empty answer
+   * on an unreachable database would disconnect every daemon of a healthy platform. {@link #read} is
+   * the retried bracket that keeps the two apart by giving up loudly.
+   */
+  public Optional<Place> place(UUID rowId) {
+    if (rowId == null) {
+      return Optional.empty();
+    }
+    return Optional.ofNullable(
+        read(
+            "The row read of " + rowId,
+            () -> {
+              CtContainer row = containers.findById(rowId);
+              return row == null || row.desiredState == DesiredState.ABSENT ? null : placeOf(row);
+            }));
+  }
+
+  /**
    * An owner's live places, oldest first — every workload when {@code workload} is null.
    *
    * <p><b>From the rows.</b> There is no listing by label anywhere in this service, and this is the

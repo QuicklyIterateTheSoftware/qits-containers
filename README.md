@@ -178,9 +178,67 @@ reads: the failure is on the writing side too, where an unregistered record has 
 find. A JVM test cannot catch a missing entry — on a JVM these types reflect whether anyone
 registered them or not — which is why the list is written down here rather than discovered.
 
+## The data plane
+
+**A container that dials home can be reached, and it needs no address of its own.** This is the
+reverse tunnel qits-workspaces and qits-projects each carry a copy of, ported here once
+(`service/…/proxy/`) and **switched off**: `qits.containers.proxy.enabled` ships `false`.
+
+    ws  /containers/tunnel/{rowId}          the control socket, dialled by the container
+    ws  /containers/tunnel/stream/{nonce}   the dial-back, one per parked connection
+
+`ContainerTunnels` binds a **loopback** `NetServer` per registry row and hands out
+`ProxyOrigin(client, port)`. A caller connects there; the connection is parked; the container is
+asked over its control socket to come and collect it by nonce; it dials the stream path back and the
+two are married into a byte pipe. Three properties are the whole design and none is an optimisation:
+
+- **The origin's `HttpClient` travels with its port and must be used.** An ephemeral port is reused,
+  so a pool keyed on `(host, port)` can hold a connection wired through to the *previous* tenant of
+  that port — here a cross-owner read into another module's container. Each tunnel owns its client
+  and is closed with it.
+- **The nonce is the dial-back's whole authentication**: host-minted, single-use (an atomic map
+  removal), short-lived, and bound to the row it was sent to. Unknown and already-claimed both get a
+  bare 404.
+- **Bytes, not framed requests**, which is what lets a WebSocket upgrade traverse a tunnel unchanged.
+  The stream route is raw Vert.x for exactly one reason: websockets-next' connection has
+  `sendBinary` and no `writeQueueFull`/`drainHandler`, and a byte tunnel with no backpressure signal
+  is an unbounded heap buffer.
+
+**The control socket authenticates, and that is where this departs from what it was ported from.**
+Both sources name their caller with a path parameter and check nothing, so anything on the platform
+network can claim to be any project's or any workspace's daemon — a weakness both repos record and
+carry because containers are already running against those contracts. This one is fresh, so the row
+id in the path is the *claim* and `X-Qits-Tunnel-Secret` is the evidence.
+
+**`TunnelProtocol` is append-only.** Its paths and frame names are baked into a container's
+environment at creation and only a recreate re-injects them, so a value that changed meaning would
+break every container already running.
+
+### What a restart needs from it: nothing
+
+All of this is in memory and rebuilt lazily. The durable fact this service keeps is **which
+containers exist** — that is what the rows are — and a socket is not that kind of fact: it dies with
+the process at both ends. So a restart re-adopts the containers, the daemons re-dial, and the first
+request binds a listener again. Nothing here is reconciled with anything and nothing may be
+persisted "for" it.
+
+### What round 2 owes
+
+- **A consumer.** qits-workspaces and qits-projects own their proxy routes for now, and neither was
+  ported: what a route needs is the origin, and the origin is what this ships. `endpoint.proxy` is
+  still null on the envelope, and it is what a migrating consumer will read.
+- **The secret on the ensure envelope.** `ContainerTunnels.issueSecret` mints one; nothing calls it
+  yet, because handing it to a container is a change to the wire both the client and the service
+  restate, and that lands with the first consumer.
+- **A durable-secret decision, whose default is already chosen.** A column on the row would survive a
+  restart of *this* service — at the cost of a migration and of storing a live credential in the one
+  table whose design decision is that it stores none. **Re-issue on adopt** is the restart-safe
+  answer and needs no schema: the boot sweep already adopts every row whose container is still
+  running, which is exactly the moment a fresh secret can be handed over. What it needs is one frame
+  in the protocol for telling a running container its new secret.
+
 ## What is deliberately *not* here yet
 
-- **The data plane.** The reverse tunnels two other modules carry today centralize here eventually.
 - **The consumers.** qits-ci, qits-workspaces and qits-projects still run their own containers; the
   point of this service is that they stop, one at a time.
 
@@ -200,7 +258,8 @@ Everything else has a shipped default and a deployment overrides what it means t
 `QITS_AUTH_MACHINE_REQUIRED=true` with `QITS_AUTH_MACHINE_AUDIENCE=<env>-qits-containers` turns the
 gate on; `QITS_CONTAINERS_INSTANCE` distinguishes two instances in `docker ps`;
 `QITS_CONTAINERS_NETWORK` and `QITS_CONTAINERS_SHARED_VOLUMES` name what the boot step makes sure
-of. The container needs the docker socket, and it is the deployment that grants it — nothing here
+of; `QITS_CONTAINERS_PROXY_ENABLED=true` switches the data plane on, and no deployment sets it yet.
+The container needs the docker socket, and it is the deployment that grants it — nothing here
 mounts one for itself.
 
 ### What a boot does, in order

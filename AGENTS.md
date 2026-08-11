@@ -132,6 +132,51 @@ type, so nothing in `core` imports an eventstream class for it.
   `qits-arch-rules`. They fail this build for a datasource missing a line of the three-line
   resilience block, and for an entity that neither implements `CausedRow` nor declares `@Uncaused`.
 
+## The data plane, and the two rules it is under
+
+`service/…/proxy/` is the reverse tunnel, ported from qits-projects' `AgentTunnels` and
+qits-workspaces' `WorkspaceTunnels` — near-identical twins whose javadocs carry the measurements and
+are reproduced rather than summarized. README's "The data plane" says what it is and what round 2
+owes; these are the two rules you can break without the build noticing.
+
+**1. `TunnelProtocol` is APPEND-ONLY.** Every constant in it — both paths, both frame names, the
+field names, the handshake header — is baked into a container's environment at creation, and only a
+*recreate* re-injects it. So a container started this morning is still dialling the string that file
+held this morning. Add a constant, never repurpose one; a behaviour change bumps
+`CAPABILITY_VERSION` and the host branches on what a daemon announces. The one derivation allowed is
+the stream prefix being built on the control prefix, so the two cannot drift.
+
+**2. The per-tunnel secret is deliberate, and it is where this port departs from its sources.** Both
+control sockets it was ported from are token-free and take their caller's identity from a **path
+parameter**, so anything on the platform's network can claim to be any project's or any workspace's
+daemon. Both repositories record that and carry it, correctly: containers are already running
+against those contracts and an interim token is what the platform has a standing decision against.
+Neither reason applies here — nothing runs against this contract yet — so the row id in the path is
+the *claim* and `X-Qits-Tunnel-Secret` is the evidence, checked constant-time, before the row is even
+read. **Do not "simplify" it back to the sources' shape**, and do not add a second credential beside
+it: the dial-back stays nonce-only, because a dial-back repeating the secret would be a second place
+for it to leak.
+
+The durable-secret question is *deferred, not open*: re-issue on adopt is the answer, a column on
+the row is the one to argue against. README says why.
+
+Three smaller things, each a trap:
+
+- **The gate refuses at open; it cannot unregister.** A websockets-next endpoint is registered at
+  augmentation, so with `qits.containers.proxy.enabled` off the socket exists and closes every dial
+  with `TunnelProtocol.Close.DISABLED`. `TunnelGateTest` asserts the refusal, the route's 404 **and**
+  that no loopback listener is bound — that third one is what keeps the gate from becoming a gate in
+  name only. It runs on `FakeDriverProfile`, the profile with no config overrides, because the claim
+  is about the value the jar ships.
+- **The stream route is raw Vert.x and must stay raw**, even though the extension is now in this
+  module. `io.quarkus.websockets.next.Connection` has `sendBinary` and no
+  `writeQueueFull`/`drainHandler`, and a byte tunnel with no backpressure signal is an unbounded heap
+  buffer. Same reason both sources give.
+- **The socket reads the row through `ContainerRegistry.place`, never through the repository.** An
+  empty answer there disconnects a daemon, so it must mean "no live row" and never "could not ask" —
+  the retried bracket is what keeps those apart, and a direct `findById` would refuse every healthy
+  container the moment postgres blinked.
+
 ## The client module, and its three rules
 
 **1. No `core`, no `service`, and no framework.** The first two are the module split; the third is
