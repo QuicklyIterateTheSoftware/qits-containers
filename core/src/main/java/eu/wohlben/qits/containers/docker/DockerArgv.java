@@ -96,6 +96,15 @@ public final class DockerArgv {
     for (String addHost : spec.addHosts()) {
       argv.add("--add-host=" + ContainersIdentifiers.requireAddHost(addHost));
     }
+    // Who the first process is, rendered only when the spec named somebody — an unset user means
+    // the image's own default, and the two must stay different statements. It is decided HERE
+    // because it cannot be decided later: a container run with --cap-drop=ALL has no CAP_SETUID and
+    // no CAP_SETGID, so `su` inside its script fails whatever the script does. Measured 2026-08-12
+    // on qits-ci's own step containers, where the adduser/chown/su pattern could never have worked.
+    if (!spec.user().isEmpty()) {
+      argv.add("--user");
+      argv.add(ContainersIdentifiers.requireUser(spec.user()));
+    }
     // Sorted, because the whole argv is asserted literally and a map's iteration order is not a
     // thing to assert against.
     for (Map.Entry<String, String> label : merged(labels, spec.extraLabels()).entrySet()) {

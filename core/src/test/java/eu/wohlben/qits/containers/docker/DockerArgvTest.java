@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import eu.wohlben.qits.containers.spec.ContainerLabels;
 import eu.wohlben.qits.containers.spec.ContainerSpec;
+import eu.wohlben.qits.containers.spec.ContainersIdentifiers;
 import eu.wohlben.qits.containers.spec.LifecyclePolicy;
 import eu.wohlben.qits.containers.spec.VolumeSpec;
 import java.time.Duration;
@@ -40,7 +41,8 @@ public class DockerArgvTest {
         .env("QITS_CI_DAEMON_ID", "daemon-7")
         .entrypoint("/bin/sh")
         .args("-c", BOOTSTRAP)
-        .name("qits-ci-abc-0");
+        .name("qits-ci-abc-0")
+        .user("build");
   }
 
   private static Map<String, String> labels() {
@@ -65,6 +67,8 @@ public class DockerArgvTest {
             "--network-alias",
             "ci-step-1",
             "--add-host=host.docker.internal:host-gateway",
+            "--user",
+            "build",
             "--label",
             "qits.ci.run=run-1",
             "--label",
@@ -136,6 +140,47 @@ public class DockerArgvTest {
     for (String element : argv) {
       assertFalse(element.contains("docker.sock"), "no workload may see a socket it did not ask for: " + element);
     }
+  }
+
+  @Test
+  public void aSpecThatNamedNoUserRendersNoUserFlagAtAll() {
+    // The absence is the claim. An unset user means the image's own default, and a --user that
+    // appeared unasked would run every existing workload as somebody it was never built for.
+    List<String> argv = render(ciStep().user("").build(), LifecyclePolicy.ephemeral(null));
+    assertFalse(argv.contains("--user"), argv.toString());
+    assertFalse(argv.contains("build"), argv.toString());
+  }
+
+  @Test
+  public void theUserFlagIsTheOnlyDifferenceBetweenNamingOneAndNot() {
+    LifecyclePolicy policy = LifecyclePolicy.ephemeral(null);
+    List<String> withUser = render(ciStep().build(), policy);
+    List<String> without = render(ciStep().user("").build(), policy);
+
+    int flag = withUser.indexOf("--user");
+    assertTrue(flag > 0, withUser.toString());
+    assertEquals("build", withUser.get(flag + 1));
+
+    List<String> minusThePair = new ArrayList<>(withUser);
+    minusThePair.subList(flag, flag + 2).clear();
+    assertEquals(without, minusThePair, "naming a user must add a flag and change nothing else");
+  }
+
+  @Test
+  public void aHostileUserNeverReachesTheArgv() {
+    // --user's own `user:group` form is what a colon here would forge, and a leading dash is the
+    // usual option-shaped argument. Neither is a thing to leave to the CLI's parser.
+    for (String hostile : List.of("build:root", "-u", "Build", "root user", "")) {
+      assertThrows(
+          IllegalArgumentException.class,
+          () -> ContainersIdentifiers.requireUser(hostile),
+          hostile);
+    }
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> ContainerSpec.builder("img").network("qits-net").user("build:root").build());
+    // A bare uid is fine — it is what a passwd-less image is addressed by.
+    assertEquals("1001", ContainersIdentifiers.requireUser("1001"));
   }
 
   @Test

@@ -58,7 +58,7 @@ public final class ContainersWire {
     NEVER
   }
 
-  /** Everything one container is started with. Fourteen fields, so build it rather than call it. */
+  /** Everything one container is started with. Fifteen fields, so build it rather than call it. */
   public record Spec(
       String image,
       List<String> entrypoint,
@@ -73,12 +73,41 @@ public final class ContainersWire {
       boolean hostDockerSocket,
       Security security,
       PullPolicy pullPolicy,
-      String explicitName) {
+      String explicitName,
+      String user) {
 
     /** The two fields the service refuses a spec without, and nothing else. */
     public static Spec of(String image, String network) {
       return new Spec(
-          image, null, null, null, null, network, null, null, null, null, false, null, null, null);
+          image, null, null, null, null, network, null, null, null, null, false, null, null, null,
+          null);
+    }
+
+    /**
+     * The same spec, run as somebody. Null or empty keeps the image's default, which is root.
+     *
+     * <p>It is a spec field rather than something a script does because a sandboxed container cannot
+     * change user from the inside: {@code --cap-drop=ALL} takes CAP_SETUID and CAP_SETGID away, so
+     * {@code su} fails there whatever the script says. The image has to carry a passwd entry for the
+     * name — anything calling {@code getpwuid} needs one.
+     */
+    public Spec runAs(String value) {
+      return new Spec(
+          image,
+          entrypoint,
+          args,
+          env,
+          extraLabels,
+          network,
+          aliases,
+          addHosts,
+          volumeMounts,
+          sharedMounts,
+          hostDockerSocket,
+          security,
+          pullPolicy,
+          explicitName,
+          value);
     }
   }
 

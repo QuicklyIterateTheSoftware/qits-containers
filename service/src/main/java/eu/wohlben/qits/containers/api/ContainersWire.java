@@ -59,7 +59,8 @@ public final class ContainersWire {
       boolean hostDockerSocket,
       SecurityDto security,
       ContainerSpec.PullPolicy pullPolicy,
-      String explicitName) {}
+      String explicitName,
+      String user) {}
 
   /**
    * {@link LifecyclePolicy} on the wire. The two durations are seconds rather than an ISO string
@@ -178,7 +179,8 @@ public final class ContainersWire {
                 dto.security().pidsLimit(),
                 dto.security().cpus()),
         dto.pullPolicy(),
-        dto.explicitName());
+        dto.explicitName(),
+        dto.user());
   }
 
   /** The policy a caller sent. A body with no policy is refused rather than defaulted. */

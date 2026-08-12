@@ -70,6 +70,13 @@ public final class ContainersIdentifiers {
   /** One side of an {@code --add-host} entry: a host name or an address, never punctuation. */
   private static final String HOST_ENTRY = "[A-Za-z0-9][A-Za-z0-9._:-]*";
 
+  /**
+   * The user a container runs as — a passwd name or a bare uid. Underscores are in because that is
+   * what a system account is usually spelled with; a {@code :} is out because {@code --user}'s own
+   * {@code user:group} form would let one value carry a group nobody declared.
+   */
+  private static final String USER_NAME = "[a-z0-9_][a-z0-9_-]*";
+
   /** A docker network name — the volume charset, for the same reasons. */
   private static final String NETWORK_NAME = "[a-zA-Z0-9][a-zA-Z0-9_.-]*";
 
@@ -119,6 +126,22 @@ public final class ContainersIdentifiers {
       throw refuse("volume name", name);
     }
     return name;
+  }
+
+  /**
+   * The user the container's first process runs as — {@code docker run --user}.
+   *
+   * <p>A name or a uid, and the image has to back it: docker takes an unknown uid happily, but a
+   * process running as one has no passwd entry, and anything that calls {@code getpwuid} — zonky's
+   * {@code initdb} is the platform's measured case — fails on a user that exists only as a number.
+   * That is the image's job to provide; what this belt is for is the argv element, which must not
+   * be able to open with a {@code -} or carry a {@code :}.
+   */
+  public static String requireUser(String user) {
+    if (user == null || user.isEmpty() || user.length() > OWNER_MAX || !user.matches(USER_NAME)) {
+      throw refuse("user", user);
+    }
+    return user;
   }
 
   /** The network a container is started on. One only — docker takes one at run time. */

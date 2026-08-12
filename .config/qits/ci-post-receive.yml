@@ -9,6 +9,7 @@
 steps:
     # --- step 1: the suite ------------------------------------------------------------------------
   - image: qits/build-images/maven-base:latest
+    user: build
     timeout-seconds: 1800
     script: |
       set -eu
@@ -17,15 +18,15 @@ steps:
       # inside a step container, and the derived address needs the exact-id mirror to pass Maven's
       # HTTP blocker (see .qits-maven-settings.xml).
       #
-      # The suite starts zonky's embedded postgres, and initdb refuses to
-      # run as root — which step containers are. Measured 2026-08-11 (run
-      # c916d334 red on qits-eventstream, same tree green as a user): drop
-      # to a build user. Both suites here spawn one, so both need it.
+      # `user: build` above, and NOT a switch inside this script. The suite starts zonky's embedded
+      # postgres, initdb refuses to run as root and calls getpwuid, so the step needs a passwd-backed
+      # non-root user — maven-base carries one (uid 1001). It has to be chosen at `docker run`
+      # because a step container is started `--cap-drop=ALL`: without CAP_SETUID and CAP_SETGID `su`
+      # cannot switch user at all, and without CAP_CHOWN even root cannot chown. Measured 2026-08-12,
+      # the first time this step ran: `chown: /workspace: Operation not permitted`.
       export QITS_MAVEN_REPOSITORY_URL="$QITS_MAVEN_REGISTRY_URL"
-      adduser -D build
-      chown -R build /workspace
-      su build -c './mvnw -B -ntp -s .qits-maven-settings.xml verify \
-        -Dqits.maven.repository.url="$QITS_MAVEN_REPOSITORY_URL"'
+      ./mvnw -B -ntp -s .qits-maven-settings.xml verify \
+        -Dqits.maven.repository.url="$QITS_MAVEN_REPOSITORY_URL"
 
     # --- step 2: the image ------------------------------------------------------------------------
   - image: qits/build-images/ci-base:latest

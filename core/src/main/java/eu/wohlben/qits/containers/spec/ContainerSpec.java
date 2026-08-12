@@ -23,7 +23,7 @@ import java.util.Map;
  * that omits a field and a caller that sends {@code []} mean the same thing, and every collection
  * here comes back immutable.
  *
- * <p>Use {@link #builder(String)} rather than the canonical constructor: fourteen positional
+ * <p>Use {@link #builder(String)} rather than the canonical constructor: fifteen positional
  * arguments is a call nobody can read, and a mis-ordered pair of them would compile.
  *
  * @param image the reference to run. Loose by design — see {@link
@@ -50,6 +50,12 @@ import java.util.Map;
  *     registry has no such image" its own recorded outcome rather than a run failure.
  * @param explicitName the container name, when the owner keeps its own (qits-ci does). Empty means
  *     this service derives one.
+ * @param user who the first process runs as — {@code docker run --user}. Empty keeps the image's own
+ *     default, which is root for every base image the platform builds on. It exists because a
+ *     sandboxed container cannot change user from the inside: {@code --cap-drop=ALL} takes CAP_SETUID
+ *     and CAP_SETGID away, so {@code su} inside the script fails whatever the script does, and the
+ *     only moment a user can be chosen is the {@code run}. Measured 2026-08-12, on qits-containers'
+ *     own post-receive step. See {@link ContainersIdentifiers#requireUser}.
  */
 public record ContainerSpec(
     String image,
@@ -65,7 +71,8 @@ public record ContainerSpec(
     boolean hostDockerSocket,
     SecurityPosture security,
     PullPolicy pullPolicy,
-    String explicitName) {
+    String explicitName,
+    String user) {
 
   /** A named volume of this workload's own, and where it lands inside the container. */
   public record VolumeMount(String volumeName, String containerPath) {
@@ -134,6 +141,10 @@ public record ContainerSpec(
     if (!explicitName.isEmpty()) {
       ContainersIdentifiers.requireContainerName(explicitName);
     }
+    user = user == null || user.isBlank() ? "" : user;
+    if (!user.isEmpty()) {
+      ContainersIdentifiers.requireUser(user);
+    }
   }
 
   private static <T> List<T> copy(List<T> values) {
@@ -171,6 +182,7 @@ public record ContainerSpec(
     private SecurityPosture security = SecurityPosture.none();
     private PullPolicy pullPolicy = PullPolicy.MISSING;
     private String explicitName = "";
+    private String user = "";
 
     private Builder(String image) {
       this.image = image;
@@ -241,6 +253,11 @@ public record ContainerSpec(
       return this;
     }
 
+    public Builder user(String value) {
+      user = value;
+      return this;
+    }
+
     public ContainerSpec build() {
       return new ContainerSpec(
           image,
@@ -256,7 +273,8 @@ public record ContainerSpec(
           hostDockerSocket,
           security,
           pullPolicy,
-          explicitName);
+          explicitName,
+          user);
     }
   }
 }

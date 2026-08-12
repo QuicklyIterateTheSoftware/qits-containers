@@ -157,7 +157,8 @@ class ContainersClientWireTest {
                 new eu.wohlben.qits.containers.client.ContainersWire.Security(
                     true, true, "512m", "512m", 128L, "1.5"),
                 eu.wohlben.qits.containers.client.ContainersWire.PullPolicy.NEVER,
-                "qits-ci-step-run-1-explicit"),
+                "qits-ci-step-run-1-explicit",
+                "build"),
             Policy.idleStop(3600L),
             Recreate.never);
 
@@ -166,9 +167,21 @@ class ContainersClientWireTest {
     assertTrue(answer.succeeded(), answer.detail());
     assertEquals("qits-ci-step-run-1-explicit", answer.value().containerName());
     assertEquals("run-1-step", answer.value().endpoint().alias());
+    // The user survives the whole round trip — client record, JSON, SpecDto, domain spec — because
+    // it is the only place the container's identity can be chosen: cap-drop=ALL leaves the script
+    // no way to change it from the inside.
+    assertEquals("build", driver.ranSpecs().getFirst().user());
 
     String argv = String.join(" ", driver.calls());
     assertTrue(argv.contains("run:qits-ci-step-run-1-explicit"), argv);
+  }
+
+  @Test
+  void aSpecThatNamedNoUserArrivesWithNone() {
+    // The absence, asserted where the presence is: a default that leaked in here would run every
+    // existing workload as somebody it was never built for.
+    assertTrue(client.ensure(OWNER, WORKLOAD, REF, EXPLICIT).succeeded());
+    assertEquals("", driver.ranSpecs().getFirst().user());
   }
 
   @Test
@@ -218,7 +231,7 @@ class ContainersClientWireTest {
         EnsureRequest.of(
             new Spec(
                 "alpine:3", null, null, null, null, "qits-net",
-                List.of("Not A Label"), null, null, null, false, null, null, null),
+                List.of("Not A Label"), null, null, null, false, null, null, null, null),
             Policy.explicitLifetime());
 
     ContainersAnswer<Envelope> answer = client.ensure(OWNER, WORKLOAD, REF, bad);
@@ -226,6 +239,21 @@ class ContainersClientWireTest {
     assertTrue(answer.invalid(), answer.detail());
     assertEquals(400, ((Refused<Envelope>) answer).status());
     assertTrue(((Refused<Envelope>) answer).message().contains("network alias"));
+  }
+
+  @Test
+  void aUserTheArgvWouldRefuseArrivesAsInvalid() {
+    // `build:root` is --user's own user:group form — one value carrying a group nobody declared.
+    ContainersAnswer<Envelope> answer =
+        client.ensure(
+            OWNER,
+            WORKLOAD,
+            REF,
+            EnsureRequest.of(
+                Spec.of("alpine:3", "qits-net").runAs("build:root"), Policy.explicitLifetime()));
+
+    assertTrue(answer.invalid(), answer.detail());
+    assertTrue(((Refused<Envelope>) answer).message().contains("user"));
   }
 
   // --- reads -----------------------------------------------------------------------------------------

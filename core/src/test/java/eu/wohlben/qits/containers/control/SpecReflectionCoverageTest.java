@@ -49,6 +49,7 @@ public class SpecReflectionCoverageTest {
         .security(new ContainerSpec.SecurityPosture(true, true, "512m", "512m", 256L, "1.5"))
         .pullPolicy(ContainerSpec.PullPolicy.ALWAYS)
         .name("qits-ci-step-1")
+        .user("build")
         .build();
   }
 
@@ -81,6 +82,7 @@ public class SpecReflectionCoverageTest {
             "qits-step-1-work", // a VolumeMount
             "qits-maven-repo", // a SharedMount
             "512m", // a SecurityPosture field
+            "build", // the user — a plain String component, so it needs no registration of its own
             "ALWAYS")) { // the PullPolicy enum
       assertTrue(json.contains(named), json + " does not name " + named);
     }
@@ -90,6 +92,7 @@ public class SpecReflectionCoverageTest {
     assertEquals(spec.sharedMounts(), back.sharedMounts());
     assertEquals(spec.security(), back.security());
     assertEquals(spec.pullPolicy(), back.pullPolicy());
+    assertEquals(spec.user(), back.user());
     // hash() is the second path through the same records, over the form that keeps env.
     assertEquals(64, SpecFingerprint.hash(spec).length(), "sha256, hex");
   }

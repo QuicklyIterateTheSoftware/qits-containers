@@ -112,6 +112,7 @@ final class SpecFingerprint {
         spec.hostDockerSocket(),
         spec.security(),
         spec.pullPolicy(),
-        spec.explicitName());
+        spec.explicitName(),
+        spec.user());
   }
 }
