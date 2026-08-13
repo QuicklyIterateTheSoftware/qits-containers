@@ -24,6 +24,14 @@ public final class ContainersTimeouts {
    */
   public static final Duration RUN = Duration.ofMinutes(3);
 
+  /**
+   * A {@code docker start} of a container that is already there. Far below {@link #RUN}, because no
+   * image can be fetched on this path — the container exists, so its image is already resolved into
+   * it — but not an inspect's ten seconds either: the daemon answers once it has created the task,
+   * and a host under load takes longer over that than over reading a state.
+   */
+  public static final Duration START = Duration.ofSeconds(60);
+
   /** An inspect. Short: it reads local state, and a daemon that cannot answer it is not answering. */
   public static final Duration INSPECT = Duration.ofSeconds(10);
 

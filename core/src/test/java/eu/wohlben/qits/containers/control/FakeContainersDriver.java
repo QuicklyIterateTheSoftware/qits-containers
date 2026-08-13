@@ -26,6 +26,13 @@ import java.util.concurrent.ConcurrentHashMap;
  * This copy is {@code core}'s; a module that needs one copies it, and the copies are free to diverge
  * to what each suite actually scripts.
  *
+ * <p><b>Three calls do keep state, and that is not scripting but the daemon's own arithmetic on
+ * names.</b> {@code run} refuses a name a container already carries, {@code stop} leaves an exited
+ * container behind that name, and {@code start} flips one back to running with its id unchanged.
+ * They are here because a fake whose {@code run} quietly overwrote its map entry could not tell a
+ * plan that RAN from a plan that STARTED — measured 2026-08-13, on a restart path that was green
+ * here and refused by every real daemon.
+ *
  * <p><b>The call log is the point.</b> Half of what this service has to get right is ORDER — a row
  * before a run, logs before a removal, an adopt before anything else at boot — and order is not
  * visible in return values. Every method appends one {@code kind:target} line and {@link #calls()}
@@ -177,10 +184,43 @@ public class FakeContainersDriver implements ContainersDriver {
     refuseIfDown("run " + name);
     calls.add("run:" + name);
     ranSpecs.add(spec);
+    Observed taken = containers.get(name);
+    if (taken != null) {
+      // Docker refuses a name another container already carries, running or exited, and no script
+      // can say otherwise here: the name is the state. This fake used to overwrite the entry, which
+      // made a registry that RAN where it should have STARTED green in this suite and refused by
+      // every real daemon.
+      return new Started(
+          false,
+          "",
+          "Conflict. The container name \"/" + name + "\" is already in use by " + taken.id());
+    }
     if (nextRun.started()) {
       containers.put(name, new Observed(nextRun.containerId(), "running", "none", Instant.EPOCH));
     }
     return nextRun;
+  }
+
+  /**
+   * A start of the container that is there. It keeps the id, which is the whole claim a restart
+   * makes: the same container came back rather than a new one being made under the old name.
+   */
+  @Override
+  public OpResult start(String name, Duration timeout) {
+    refuseIfDown("start " + name);
+    calls.add("start:" + name);
+    Observed existing = containers.get(name);
+    if (existing == null) {
+      // A start cannot invent a container, whatever the ops were scripted with. This is docker's
+      // own answer for a name it does not have, and it is the vanished-container case the registry
+      // has to degrade on rather than crash.
+      return new OpResult(false, "Error response from daemon: No such container: " + name);
+    }
+    if (nextOp.ok()) {
+      containers.put(
+          name, new Observed(existing.id(), "running", existing.health(), existing.startedAt()));
+    }
+    return nextOp;
   }
 
   @Override
@@ -194,6 +234,13 @@ public class FakeContainersDriver implements ContainersDriver {
   public OpResult stop(String name, Duration timeout) {
     refuseIfDown("stop " + name);
     calls.add("stop:" + name);
+    Observed existing = containers.get(name);
+    if (nextOp.ok() && existing != null) {
+      // A stop that worked leaves the container EXITED and still on the host, holding its name and
+      // its id. That is the state an ensure of the same spec has to be able to start again.
+      containers.put(
+          name, new Observed(existing.id(), "exited", existing.health(), existing.startedAt()));
+    }
     return nextOp;
   }
 

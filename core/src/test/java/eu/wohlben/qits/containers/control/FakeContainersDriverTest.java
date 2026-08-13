@@ -14,9 +14,10 @@ import java.util.Map;
 import org.junit.jupiter.api.Test;
 
 /**
- * The fake is a test fixture, so what is asserted here is only the two properties every suite after
- * this one will lean on: the call log is append-only and in arrival order, and an unscripted
- * container is <b>absent</b> rather than healthy.
+ * The fake is a test fixture, so what is asserted here is only the properties every suite after this
+ * one leans on: the call log is append-only and in arrival order, an unscripted container is
+ * <b>absent</b> rather than healthy, and a name that is already taken behaves the way a daemon makes
+ * it behave — a refused run, and a start that brings the same container back.
  */
 public class FakeContainersDriverTest {
 
@@ -76,6 +77,48 @@ public class FakeContainersDriverTest {
     driver.scriptLabelListing(mine, List.of("id-1", "id-2"));
     assertEquals(List.of("id-1", "id-2"), driver.listByLabels(mine, T));
     assertEquals(List.of(), driver.listByLabels(Map.of(ContainerLabels.OWNER, "somebody-else"), T));
+  }
+
+  @Test
+  public void aNameThatIsTakenRefusesARunAndAnswersAStart() {
+    // The two the registry's restart path rests on, and the pair a fake that overwrote its map
+    // entry could not tell apart: a taken name is a refusal, and the container behind it is started
+    // rather than made again.
+    FakeContainersDriver driver = new FakeContainersDriver();
+    driver.scriptRun(new ContainersDriver.Started(true, "the-first-container", null));
+    driver.run(
+        spec(),
+        "c-1",
+        ContainerLabels.forContainer("qits-ci", "step", "run-1", "row-1", "instance-1"),
+        LifecyclePolicy.ephemeral(null),
+        T);
+    driver.stop("c-1", T);
+    assertEquals("exited", driver.inspect("c-1", T).orElseThrow().status(), "a stop leaves it there");
+
+    driver.scriptRun(new ContainersDriver.Started(true, "a-second-container", null));
+    ContainersDriver.Started refused =
+        driver.run(
+            spec(),
+            "c-1",
+            ContainerLabels.forContainer("qits-ci", "step", "run-1", "row-1", "instance-1"),
+            LifecyclePolicy.ephemeral(null),
+            T);
+    assertFalse(refused.started(), "docker refuses a name an exited container still holds");
+    assertTrue(refused.detail().contains("already in use"), refused.detail());
+
+    assertTrue(driver.start("c-1", T).ok());
+    ContainersDriver.Observed back = driver.inspect("c-1", T).orElseThrow();
+    assertEquals("running", back.status());
+    assertEquals("the-first-container", back.id(), "a start brings the SAME container back");
+  }
+
+  @Test
+  public void aStartCannotInventAContainerTheHostDoesNotHave() {
+    FakeContainersDriver driver = new FakeContainersDriver();
+    ContainersDriver.OpResult started = driver.start("never-started", T);
+    assertFalse(started.ok());
+    assertTrue(started.detail().contains("No such container"), started.detail());
+    assertTrue(driver.inspect("never-started", T).isEmpty());
   }
 
   @Test

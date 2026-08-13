@@ -183,6 +183,11 @@ public class DockerContainersDriver implements ContainersDriver {
   }
 
   @Override
+  public OpResult start(String name, Duration timeout) {
+    return op("start " + name, DockerArgv.start(runtime, name), timeout);
+  }
+
+  @Override
   public OpResult stop(String name, Duration timeout) {
     return op("stop " + name, DockerArgv.stop(runtime, name), timeout);
   }

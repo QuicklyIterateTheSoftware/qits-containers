@@ -67,6 +67,17 @@ public interface ContainersDriver {
       LifecyclePolicy policy,
       Duration timeout);
 
+  /**
+   * Start the container that is already there, under this name, keeping its identity.
+   *
+   * <p><b>It is not a {@link #run} of the same spec, and the difference is the whole reason this
+   * method exists.</b> A stopped container still holds its name, so a run against it is refused by
+   * the daemon; and even if it were not, a run would make a <em>second</em> container — a new docker
+   * id, a new start time, and none of the state the stopped one was carrying. A workload that was
+   * stopped and is asked for again is asked for the container it had.
+   */
+  OpResult start(String name, Duration timeout);
+
   /** One inspect. Empty when docker has no such container — see {@link Observed}. */
   Optional<Observed> inspect(String name, Duration timeout);
 

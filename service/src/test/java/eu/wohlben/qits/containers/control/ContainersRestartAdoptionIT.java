@@ -53,6 +53,11 @@ import org.junit.jupiter.api.Test;
  * beans are the <b>injected</b> ones, so what runs is the deployment's configured driver against
  * the deployment's configured runtime.
  *
+ * <p><b>A second claim rides in this file</b>, because it is the same kind of claim: an {@code
+ * ensure} of a workload that was stopped starts the container that is there instead of running its
+ * spec again. A stopped container still holds its name, so on a host the difference between the two
+ * is a refusal — and a fake can only refuse because it was told to.
+ *
  * <p>Tagged {@code extended}: it needs a reachable docker daemon and it starts real containers, so
  * it is out of the default build and out of the {@code -Dnative} gate. Run it with
  * {@code ./mvnw verify -DskipITs=false}. It skips cleanly when there is no daemon, and it removes
@@ -179,6 +184,66 @@ public class ContainersRestartAdoptionIT {
       exec(RUNTIME, "rm", "-f", ContainerNames.of(OWNER, WORKLOAD, ref));
       QuarkusTransaction.requiringNew()
           .run(() -> containers.delete("owner = ?1", OWNER));
+    }
+  }
+
+  /**
+   * <b>The second claim that only a daemon can settle: a workload that was stopped and asked for
+   * again comes back as the SAME container.</b>
+   *
+   * <p>It belongs here rather than in the fake-driven suite for the reason the adoption above does.
+   * A stopped container still holds its name, so the difference between starting it and running the
+   * spec again is a refusal on a real host — and the fake could only ever refuse because it was
+   * written to. What is asserted is docker's own {@code Id}: unchanged means the container came
+   * back, and a new one means the writable layer the workload was stopped with is gone.
+   */
+  @Test
+  public void aStoppedWorkloadIsStartedAgainAsTheSameContainer() throws Exception {
+    assumeTrue(dockerAnswers(), "a reachable docker daemon is required for this IT");
+
+    String ref = "restart-" + UUID.randomUUID();
+    String containerName = ContainerNames.of(OWNER, WORKLOAD, ref);
+    String body =
+        """
+        {"spec":{"image":"%s","network":"bridge","args":["sleep","infinity"]},
+         "policy":{"type":"EXPLICIT"},"recreate":"never"}"""
+            .formatted(IMAGE);
+
+    try {
+      given()
+          .contentType(ContentType.JSON)
+          .body(body)
+          .when()
+          .put(API + "/" + ref)
+          .then()
+          .statusCode(201)
+          .body("state.observed", is("RUNNING"));
+
+      String idBefore = inspect(containerName, "{{.Id}}");
+      assertTrue(idBefore.length() > 12, "docker gave no id for " + containerName);
+
+      given().when().post(API + "/" + ref + "/stop").then().statusCode(200);
+      assertEquals("exited", inspect(containerName, "{{.State.Status}}"));
+
+      // The same spec again. It is a start of what is there, not a run of a name docker will refuse.
+      given()
+          .contentType(ContentType.JSON)
+          .body(body)
+          .when()
+          .put(API + "/" + ref)
+          .then()
+          .statusCode(200)
+          .body("created", is(false))
+          .body("state.observed", is("RUNNING"));
+
+      assertEquals("running", inspect(containerName, "{{.State.Status}}"));
+      assertEquals(
+          idBefore,
+          inspect(containerName, "{{.Id}}"),
+          "a restart of an unchanged spec must start the container that was stopped, not make one");
+    } finally {
+      exec(RUNTIME, "rm", "-f", containerName);
+      QuarkusTransaction.requiringNew().run(() -> containers.delete("owner = ?1", OWNER));
     }
   }
 

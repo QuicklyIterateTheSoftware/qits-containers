@@ -191,7 +191,7 @@ public class ContainerRegistry {
     START,
     /** The spec changed and the policy allows a replacement: stop, remove, run the same name. */
     REPLACE,
-    /** The same spec, nothing running: start it again under the same name. */
+    /** The same spec, nothing running: a {@code docker start} of the container that is still there. */
     RESTART,
     /** Already running the spec that was asked for. Nothing to do and nothing to say. */
     ADOPTED,
@@ -227,6 +227,11 @@ public class ContainerRegistry {
    *   <li><b>Two further transactions settle the row</b>: {@code STARTING} once docker accepted the
    *       run, then whatever an inspect confirms.
    * </ol>
+   *
+   * <p><b>A place whose spec has not changed and whose container is merely stopped is started, not
+   * run again</b> — see {@link #restart}. It is the same three phases with a {@code docker start}
+   * where the run is, and it is what keeps a stopped workload's container, its id and its writable
+   * layer across an {@code ensure}.
    *
    * <p><b>The pull policy is answered by one call and one fallback, and the choice is recorded
    * here.</b> {@code ALWAYS} is an explicit {@code docker pull} before the run, so "the registry has
@@ -292,6 +297,13 @@ public class ContainerRegistry {
           ContainerLabels.forVolume(owner, workload, ownerRef),
           ContainersTimeouts.VOLUME);
     }
+    if (plan.step() == Step.RESTART) {
+      // Above the pull and below the volumes on purpose. A start fetches nothing — the container
+      // exists, so its image is already resolved into it, and a pull here would change nothing
+      // about what comes back up — while a named volume docker no longer has would be recreated
+      // unlabelled by the start itself, which is a volume the reconcile could never claim.
+      return restart(plan, place);
+    }
     if (spec.pullPolicy() == ContainerSpec.PullPolicy.ALWAYS) {
       ContainersDriver.OpResult pulled =
           driver.pull(spec.image(), ContainersTimeouts.PULL, ContainersTimeouts.PULL_MAX_CHARS);
@@ -342,6 +354,38 @@ public class ContainerRegistry {
     settle(plan.rowId(), observed, null);
     return new Ensured(
         plan.rowId(), name, DesiredState.RUNNING, observed, plan.specHash(), plan.created(), null);
+  }
+
+  /**
+   * The {@link Step#RESTART} phase: the container this row already names, started where it stands.
+   *
+   * <p><b>A start and never a second run</b>, which is the difference between a workload coming back
+   * and a workload being replaced. The stopped container still holds the name, so a run against it
+   * is refused by a real daemon — and a run that was <em>not</em> refused would be worse: a second
+   * container with a new id and none of the state the stopped one was carrying, which is exactly
+   * what {@code IDLE_STOP} stopping rather than removing exists to preserve.
+   *
+   * <p><b>A start docker could not perform is recorded rather than thrown</b>, the way a refused run
+   * is. The container vanished between the row that named it and this call; the row says so, and the
+   * observer carries it from there.
+   */
+  private Ensured restart(Plan plan, String place) {
+    String name = plan.containerName();
+    ContainersDriver.OpResult started = driver.start(name, ContainersTimeouts.START);
+    String detail = null;
+    if (started.ok()) {
+      settle(plan.rowId(), ObservedState.STARTING, null);
+    } else {
+      detail = "[docker could not start " + name + ": " + Details.brief(started.detail()) + "]";
+      LOG.warnf("Could not start %s for %s: %s", name, place, Details.brief(started.detail()));
+    }
+    // The same inspect every other outcome is settled on, the failure included: what the row records
+    // is what the host says. A start that failed against a container still sitting there is EXITED,
+    // and only one that is really gone is MISSING.
+    ObservedState observed = observedOf(driver.inspect(name, ContainersTimeouts.INSPECT));
+    settle(plan.rowId(), observed, detail);
+    return new Ensured(
+        plan.rowId(), name, DesiredState.RUNNING, observed, plan.specHash(), plan.created(), detail);
   }
 
   /**

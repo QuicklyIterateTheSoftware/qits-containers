@@ -245,6 +245,15 @@ public final class DockerArgv {
         ContainersIdentifiers.requireContainerName(name));
   }
 
+  /**
+   * Start the container that already carries this name. It takes no spec and no flag: everything a
+   * container is was decided by the {@link #run} that created it, and a start that could re-state
+   * any of it would be a second place for the sandbox to be written.
+   */
+  public static List<String> start(String runtimeBinary, String name) {
+    return List.of(runtimeBinary, "start", ContainersIdentifiers.requireContainerName(name));
+  }
+
   /** Stop it, leaving it restartable. */
   public static List<String> stop(String runtimeBinary, String name) {
     return List.of(runtimeBinary, "stop", ContainersIdentifiers.requireContainerName(name));

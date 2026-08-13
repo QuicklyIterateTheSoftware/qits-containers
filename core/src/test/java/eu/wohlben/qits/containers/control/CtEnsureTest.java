@@ -17,9 +17,10 @@ import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 
 /**
- * The five claims {@code ensure} exists to make: the row comes first, a refused run is adopted
- * rather than repeated, a changed spec is replaced only where the policy allows it, and the stored
- * spec carries no credential while the hash still sees one change.
+ * The claims {@code ensure} exists to make: the row comes first, a refused run is adopted rather
+ * than repeated, a stopped container is started where it stands while a changed spec is replaced
+ * only where the policy allows it, and the stored spec carries no credential while the hash still
+ * sees one change.
  */
 @QuarkusTest
 public class CtEnsureTest extends CtTestSupport {
@@ -62,10 +63,9 @@ public class CtEnsureTest extends CtTestSupport {
   public void aRefusedRunAdoptsTheContainerTheRowAlreadyNames() {
     // The crash-retry case: a previous attempt started the container and died before recording it,
     // so docker refuses the name. The row named it first, so it is ours.
+    // Only the container is scripted: the fake refuses a name that is already taken by itself, the
+    // way a daemon does, so nothing here has to spell out the refusal the registry is measured on.
     String name = nameOf(OWNER, WORKLOAD, "run-dup");
-    driver.scriptRun(
-        new ContainersDriver.Started(
-            false, "", "Conflict. The container name \"" + name + "\" is already in use"));
     driver.scriptContainer(name, "running", "none", java.time.Instant.EPOCH);
 
     ContainerRegistry.Ensured ensured =
@@ -115,6 +115,135 @@ public class CtEnsureTest extends CtTestSupport {
         driver.calls(),
         "stop and remove precede the replacement run, and the row was never removed");
     assertEquals("alpine:3.20", row(second.rowId()).image);
+  }
+
+  @Test
+  public void aStoppedWorkloadIsStartedWhereItStandsRatherThanRunASecondTime() {
+    // The claim this whole restart path exists for. A plan that ran instead of starting is refused
+    // by a real daemon — the exited container still holds the name — and settles the row MISSING,
+    // and a run that was NOT refused would be worse: a different container under the old name,
+    // carrying none of the state the stopped one had.
+    driver.scriptRun(new ContainersDriver.Started(true, "the-first-container", null));
+    ContainerRegistry.Ensured first =
+        registry.ensure(
+            OWNER,
+            "workspace",
+            "ws-restart",
+            spec("alpine:3"),
+            LifecyclePolicy.explicitLifetime(),
+            false);
+    String name = first.containerName();
+
+    registry.stop(OWNER, "workspace", "ws-restart");
+
+    // Any second run would carry this id, so the identity assertion below names which container
+    // came back rather than merely that one did.
+    driver.scriptRun(new ContainersDriver.Started(true, "a-second-container", null));
+    ContainerRegistry.Ensured again =
+        registry.ensure(
+            OWNER,
+            "workspace",
+            "ws-restart",
+            spec("alpine:3"),
+            LifecyclePolicy.explicitLifetime(),
+            false);
+
+    assertEquals(ObservedState.RUNNING, again.observed());
+    assertFalse(again.created());
+    assertEquals(first.rowId(), again.rowId(), "a restart is the same place, so it is the same row");
+    assertEquals(
+        List.of(
+            "run:" + name,
+            "inspect:" + name,
+            "stop:" + name,
+            "start:" + name,
+            "inspect:" + name),
+        driver.calls(),
+        "the stopped container is started where it stands: no second run, and no removal");
+    assertEquals(
+        "the-first-container",
+        driver.inspect(name, java.time.Duration.ofSeconds(10)).orElseThrow().id(),
+        "identity is the claim: what came back is the container that was stopped");
+  }
+
+  @Test
+  public void aStoppedWorkloadWhoseSpecChangedIsStillReplacedWhenARecreateWasAskedFor() {
+    // The other half of the restart: a start is only ever for a spec that did not change. A changed
+    // one is a replacement, exited container and all.
+    ContainerRegistry.Ensured first =
+        registry.ensure(
+            OWNER,
+            "workspace",
+            "ws-restart-changed",
+            spec("alpine:3"),
+            LifecyclePolicy.explicitLifetime(),
+            false);
+    String name = first.containerName();
+
+    registry.stop(OWNER, "workspace", "ws-restart-changed");
+
+    ContainerRegistry.Ensured second =
+        registry.ensure(
+            OWNER,
+            "workspace",
+            "ws-restart-changed",
+            spec("alpine:3.20"),
+            LifecyclePolicy.explicitLifetime(),
+            true);
+
+    assertEquals(ObservedState.RUNNING, second.observed());
+    assertEquals("alpine:3.20", row(second.rowId()).image);
+    assertEquals(
+        List.of(
+            "run:" + name,
+            "inspect:" + name,
+            "stop:" + name,
+            "stop:" + name,
+            "remove:" + name,
+            "run:" + name,
+            "inspect:" + name),
+        driver.calls(),
+        "the exited container is removed before the replacement run, and never started");
+  }
+
+  @Test
+  public void aRestartOfAContainerThatVanishedIsRecordedOnTheRowRatherThanThrown() {
+    ContainerRegistry.Ensured first =
+        registry.ensure(
+            OWNER,
+            "workspace",
+            "ws-restart-gone",
+            spec("alpine:3"),
+            LifecyclePolicy.explicitLifetime(),
+            false);
+    String name = first.containerName();
+
+    registry.stop(OWNER, "workspace", "ws-restart-gone");
+    // Removed on the host between the stop and the ask — by a person, or by a daemon that pruned.
+    driver.scriptGone(name);
+
+    ContainerRegistry.Ensured again =
+        registry.ensure(
+            OWNER,
+            "workspace",
+            "ws-restart-gone",
+            spec("alpine:3"),
+            LifecyclePolicy.explicitLifetime(),
+            false);
+
+    assertEquals(
+        ObservedState.MISSING, again.observed(), "docker has no such container, so the row says so");
+    assertTrue(again.detail().contains("could not start " + name), again.detail());
+    assertTrue(row(again.rowId()).detail.contains("could not start " + name));
+    assertEquals(
+        List.of(
+            "run:" + name,
+            "inspect:" + name,
+            "stop:" + name,
+            "start:" + name,
+            "inspect:" + name),
+        driver.calls(),
+        "a failed start is settled from the same inspect every other outcome uses");
   }
 
   @Test

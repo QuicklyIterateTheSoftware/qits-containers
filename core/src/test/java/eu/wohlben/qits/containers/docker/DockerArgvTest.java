@@ -336,6 +336,9 @@ public class DockerArgvTest {
 
   @Test
   public void theSmallCommandsAreWhatTheySay() {
+    // A start takes the name and nothing else: what the container is was decided by the run that
+    // made it, and a flag rendered here would be the sandbox written in a second place.
+    assertEquals(List.of("docker", "start", "c"), DockerArgv.start("docker", "c"));
     assertEquals(List.of("docker", "stop", "c"), DockerArgv.stop("docker", "c"));
     assertEquals(List.of("docker", "rm", "-f", "c"), DockerArgv.rm("docker", "c"));
     assertEquals(

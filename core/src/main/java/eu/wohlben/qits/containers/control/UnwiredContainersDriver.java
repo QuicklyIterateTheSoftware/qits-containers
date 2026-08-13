@@ -53,6 +53,11 @@ public class UnwiredContainersDriver implements ContainersDriver {
   }
 
   @Override
+  public OpResult start(String name, Duration timeout) {
+    throw refuse("start " + name);
+  }
+
+  @Override
   public OpResult stop(String name, Duration timeout) {
     throw refuse("stop " + name);
   }
