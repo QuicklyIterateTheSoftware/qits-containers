@@ -187,4 +187,27 @@ public class CtEnsureTest extends CtTestSupport {
         second.specHash,
         "change detection has to see an env change, or a rotated credential never redeploys");
   }
+
+  @Test
+  public void flippingInitIsASpecChangeTheHashSees() {
+    // A container's PID 1 is not a detail the hash may be blind to: a workspace re-asked for with
+    // tini and matched against a row that says it is already there would keep running the process
+    // it was started without, and the owner would have no way to tell.
+    ContainerSpec without = spec("alpine:3");
+    ContainerSpec with =
+        ContainerSpec.builder("alpine:3").network("qits-net").init(true).build();
+
+    ContainerRegistry.Ensured plain =
+        registry.ensure(OWNER, WORKLOAD, "run-init-a", without, LifecyclePolicy.explicitLifetime(), false);
+    ContainerRegistry.Ensured inited =
+        registry.ensure(OWNER, WORKLOAD, "run-init-b", with, LifecyclePolicy.explicitLifetime(), false);
+
+    CtContainer plainRow = row(plain.rowId());
+    CtContainer initedRow = row(inited.rowId());
+
+    assertNotEquals(plainRow.specHash, initedRow.specHash);
+    // And it is on the stored spec too, so a restart compares against what was really asked for.
+    assertTrue(initedRow.specJson.contains("\"init\":true"), initedRow.specJson);
+    assertTrue(plainRow.specJson.contains("\"init\":false"), plainRow.specJson);
+  }
 }

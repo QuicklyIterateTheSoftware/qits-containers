@@ -113,6 +113,7 @@ final class SpecFingerprint {
         spec.security(),
         spec.pullPolicy(),
         spec.explicitName(),
-        spec.user());
+        spec.user(),
+        spec.init());
   }
 }

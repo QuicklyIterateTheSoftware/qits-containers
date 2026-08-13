@@ -58,7 +58,7 @@ public final class ContainersWire {
     NEVER
   }
 
-  /** Everything one container is started with. Fifteen fields, so build it rather than call it. */
+  /** Everything one container is started with. Sixteen fields, so build it rather than call it. */
   public record Spec(
       String image,
       List<String> entrypoint,
@@ -74,13 +74,14 @@ public final class ContainersWire {
       Security security,
       PullPolicy pullPolicy,
       String explicitName,
-      String user) {
+      String user,
+      Boolean init) {
 
     /** The two fields the service refuses a spec without, and nothing else. */
     public static Spec of(String image, String network) {
       return new Spec(
           image, null, null, null, null, network, null, null, null, null, false, null, null, null,
-          null);
+          null, null);
     }
 
     /**
@@ -107,6 +108,36 @@ public final class ContainersWire {
           security,
           pullPolicy,
           explicitName,
+          value,
+          init);
+    }
+
+    /**
+     * The same spec, with tini as PID 1 — {@code docker run --init}. Null and false are the same
+     * statement, and both are what a spec that says nothing means.
+     *
+     * <p>Ask for it when the container hosts something long-lived that spawns processes of its own:
+     * PID 1 inherits every orphan and reaps none unless it was written to, so a session container
+     * collects zombies for as long as it runs. A container that runs one process and exits needs
+     * none of that.
+     */
+    public Spec withInit(boolean value) {
+      return new Spec(
+          image,
+          entrypoint,
+          args,
+          env,
+          extraLabels,
+          network,
+          aliases,
+          addHosts,
+          volumeMounts,
+          sharedMounts,
+          hostDockerSocket,
+          security,
+          pullPolicy,
+          explicitName,
+          user,
           value);
     }
   }

@@ -184,6 +184,34 @@ public class DockerArgvTest {
   }
 
   @Test
+  public void aSpecThatAskedForNoInitRendersNoInitFlagAtAll() {
+    // The absence is the claim, as it is for the socket and the user: --init inserts a process
+    // between docker and the workload's own PID 1, so every container that never asked has to keep
+    // starting exactly the process its image declares. The whole-argv test above is the other half
+    // — it lists every element of a spec that asked for nothing, and --init is not among them.
+    LifecyclePolicy policy = LifecyclePolicy.ephemeral(null);
+    assertFalse(render(ciStep().build(), policy).contains("--init"));
+    assertFalse(render(ciStep().init(false).build(), policy).contains("--init"));
+  }
+
+  @Test
+  public void theInitFlagIsTheOnlyDifferenceBetweenAskingForItAndNot() {
+    LifecyclePolicy policy = LifecyclePolicy.ephemeral(null);
+    List<String> withInit = render(ciStep().init(true).build(), policy);
+    List<String> without = render(ciStep().build(), policy);
+
+    // Immediately after -d, which is where the argv keeps what kind of run this is. The position is
+    // asserted rather than left to the list comparison because the whole argv is asserted literally
+    // elsewhere, and a flag that wandered would move every element after it.
+    assertEquals("--init", withInit.get(3));
+    assertEquals("-d", withInit.get(2));
+
+    List<String> minusTheFlag = new ArrayList<>(withInit);
+    minusTheFlag.remove(3);
+    assertEquals(without, minusTheFlag, "asking for tini must add a flag and change nothing else");
+  }
+
+  @Test
   public void ephemeralRendersNoRestartPolicyAndRefusesRecreate() {
     // Its containers dial once and exit by design, so a restart policy would bring back a process
     // whose peer is gone — and a second container would redo work that happened once.

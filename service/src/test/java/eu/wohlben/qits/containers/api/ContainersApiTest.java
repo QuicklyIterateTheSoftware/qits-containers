@@ -143,6 +143,27 @@ class ContainersApiTest {
   }
 
   @Test
+  void aBodyWithNoInitFieldStartsAContainerWithoutOneAndABodyWithItAsksForTini() {
+    // The pair of bodies a rollout really sees: every caller written before the field existed sends
+    // the first shape forever, and an absent field has to keep meaning what it meant then. A 400
+    // here — or a container that quietly gained a PID 1 — is what a required field would have cost.
+    given().contentType(ContentType.JSON).body(EXPLICIT).when().put(PLACE).then().statusCode(201);
+    org.junit.jupiter.api.Assertions.assertFalse(driver.ranSpecs().getFirst().init());
+
+    given()
+        .contentType(ContentType.JSON)
+        .body(
+            """
+            {"spec":{"image":"alpine:3","network":"qits-net","init":true},
+             "policy":{"type":"EXPLICIT"},"recreate":"never"}""")
+        .when()
+        .put("/containers/api/containers/qits-ci/step/run-init")
+        .then()
+        .statusCode(201);
+    org.junit.jupiter.api.Assertions.assertTrue(driver.ranSpecs().getLast().init());
+  }
+
+  @Test
   void anImageNothingPublishedIsAFourOhNineAndNotAGreenPlace() {
     driver.scriptRun(
         new eu.wohlben.qits.containers.control.ContainersDriver.Started(

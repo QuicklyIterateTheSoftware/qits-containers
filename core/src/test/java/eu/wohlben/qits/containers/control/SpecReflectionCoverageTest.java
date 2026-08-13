@@ -50,6 +50,7 @@ public class SpecReflectionCoverageTest {
         .pullPolicy(ContainerSpec.PullPolicy.ALWAYS)
         .name("qits-ci-step-1")
         .user("build")
+        .init(true)
         .build();
   }
 
@@ -93,6 +94,7 @@ public class SpecReflectionCoverageTest {
     assertEquals(spec.security(), back.security());
     assertEquals(spec.pullPolicy(), back.pullPolicy());
     assertEquals(spec.user(), back.user());
+    assertEquals(spec.init(), back.init());
     // hash() is the second path through the same records, over the form that keeps env.
     assertEquals(64, SpecFingerprint.hash(spec).length(), "sha256, hex");
   }

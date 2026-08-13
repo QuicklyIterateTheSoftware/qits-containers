@@ -30,6 +30,7 @@ import eu.wohlben.qits.containers.control.ContainersDriver;
 import eu.wohlben.qits.containers.control.FakeContainersDriver;
 import eu.wohlben.qits.containers.persistence.CtContainerRepository;
 import eu.wohlben.qits.containers.persistence.CtVolumeRepository;
+import eu.wohlben.qits.containers.spec.ContainerSpec;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import io.quarkus.test.common.http.TestHTTPResource;
 import io.quarkus.test.junit.QuarkusTest;
@@ -158,7 +159,8 @@ class ContainersClientWireTest {
                     true, true, "512m", "512m", 128L, "1.5"),
                 eu.wohlben.qits.containers.client.ContainersWire.PullPolicy.NEVER,
                 "qits-ci-step-run-1-explicit",
-                "build"),
+                "build",
+                true),
             Policy.idleStop(3600L),
             Recreate.never);
 
@@ -171,6 +173,8 @@ class ContainersClientWireTest {
     // it is the only place the container's identity can be chosen: cap-drop=ALL leaves the script
     // no way to change it from the inside.
     assertEquals("build", driver.ranSpecs().getFirst().user());
+    // So does the ask for tini, which is nullable on the wire and a plain boolean in the domain.
+    assertTrue(driver.ranSpecs().getFirst().init());
 
     String argv = String.join(" ", driver.calls());
     assertTrue(argv.contains("run:qits-ci-step-run-1-explicit"), argv);
@@ -182,6 +186,33 @@ class ContainersClientWireTest {
     // existing workload as somebody it was never built for.
     assertTrue(client.ensure(OWNER, WORKLOAD, REF, EXPLICIT).succeeded());
     assertEquals("", driver.ranSpecs().getFirst().user());
+  }
+
+  @Test
+  void aSpecThatSaidNothingAboutInitArrivesWithoutIt() {
+    // Spec.of leaves init null, the client omits a null, and the service reads an absent field as
+    // false — which is the whole of what makes a consumer built before this field existed still
+    // correct. The same three steps are what a caller that never sets it does forever.
+    assertTrue(client.ensure(OWNER, WORKLOAD, REF, EXPLICIT).succeeded());
+    assertFalse(driver.ranSpecs().getFirst().init());
+  }
+
+  @Test
+  void withInitCarriesTheAskAndChangesNothingElse() {
+    assertTrue(
+        client
+            .ensure(
+                OWNER,
+                WORKLOAD,
+                REF,
+                EnsureRequest.of(
+                    Spec.of("alpine:3", "qits-net").withInit(true), Policy.explicitLifetime()))
+            .succeeded());
+
+    ContainerSpec ran = driver.ranSpecs().getFirst();
+    assertTrue(ran.init());
+    assertEquals("alpine:3", ran.image());
+    assertEquals("qits-net", ran.network());
   }
 
   @Test
@@ -231,7 +262,7 @@ class ContainersClientWireTest {
         EnsureRequest.of(
             new Spec(
                 "alpine:3", null, null, null, null, "qits-net",
-                List.of("Not A Label"), null, null, null, false, null, null, null, null),
+                List.of("Not A Label"), null, null, null, false, null, null, null, null, null),
             Policy.explicitLifetime());
 
     ContainersAnswer<Envelope> answer = client.ensure(OWNER, WORKLOAD, REF, bad);

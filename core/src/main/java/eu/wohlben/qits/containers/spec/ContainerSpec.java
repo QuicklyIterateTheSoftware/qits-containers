@@ -23,7 +23,7 @@ import java.util.Map;
  * that omits a field and a caller that sends {@code []} mean the same thing, and every collection
  * here comes back immutable.
  *
- * <p>Use {@link #builder(String)} rather than the canonical constructor: fifteen positional
+ * <p>Use {@link #builder(String)} rather than the canonical constructor: sixteen positional
  * arguments is a call nobody can read, and a mis-ordered pair of them would compile.
  *
  * @param image the reference to run. Loose by design — see {@link
@@ -56,6 +56,11 @@ import java.util.Map;
  *     and CAP_SETGID away, so {@code su} inside the script fails whatever the script does, and the
  *     only moment a user can be chosen is the {@code run}. Measured 2026-08-12, on qits-containers'
  *     own post-receive step. See {@link ContainersIdentifiers#requireUser}.
+ * @param init whether tini is PID 1 — {@code docker run --init}. It matters for a container that
+ *     hosts a long-lived session spawning processes of its own: PID 1 in a container inherits every
+ *     orphan and a JVM or a shell there reaps none of them, so a workspace accumulates zombies for
+ *     as long as it lives. Off by default, because a workload that runs one process and exits gains
+ *     nothing from a second process to wait for. qits-workspaces runs its containers with it.
  */
 public record ContainerSpec(
     String image,
@@ -72,7 +77,8 @@ public record ContainerSpec(
     SecurityPosture security,
     PullPolicy pullPolicy,
     String explicitName,
-    String user) {
+    String user,
+    boolean init) {
 
   /** A named volume of this workload's own, and where it lands inside the container. */
   public record VolumeMount(String volumeName, String containerPath) {
@@ -183,6 +189,7 @@ public record ContainerSpec(
     private PullPolicy pullPolicy = PullPolicy.MISSING;
     private String explicitName = "";
     private String user = "";
+    private boolean init;
 
     private Builder(String image) {
       this.image = image;
@@ -258,6 +265,11 @@ public record ContainerSpec(
       return this;
     }
 
+    public Builder init(boolean value) {
+      init = value;
+      return this;
+    }
+
     public ContainerSpec build() {
       return new ContainerSpec(
           image,
@@ -274,7 +286,8 @@ public record ContainerSpec(
           security,
           pullPolicy,
           explicitName,
-          user);
+          user,
+          init);
     }
   }
 }

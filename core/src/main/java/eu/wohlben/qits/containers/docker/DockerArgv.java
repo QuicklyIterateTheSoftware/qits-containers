@@ -85,6 +85,14 @@ public final class DockerArgv {
     argv.add(runtimeBinary);
     argv.add("run");
     argv.add("-d");
+    // tini as PID 1, beside -d because both say what SHAPE of run this is rather than what it
+    // contains. Only when the spec asked: PID 1 in a container inherits every orphan and reaps
+    // none of them unless it is written to, so a container hosting a long-lived session that
+    // spawns builds fills up with zombies — and a container that runs one process and exits pays
+    // for a second process it never needed.
+    if (spec.init()) {
+      argv.add("--init");
+    }
     argv.add("--name");
     argv.add(name);
     argv.add("--network");

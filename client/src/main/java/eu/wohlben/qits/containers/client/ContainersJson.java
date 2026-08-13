@@ -28,7 +28,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
  *       branch, where a throw would have taken the request.
  * </ul>
  *
- * <p><b>Nulls are omitted on the way out.</b> A {@link ContainersWire.Spec} has fifteen fields and
+ * <p><b>Nulls are omitted on the way out.</b> A {@link ContainersWire.Spec} has sixteen fields and
  * a caller sets three of them; the service treats an absent field and an explicit null the same
  * way, so sending the nulls buys nothing and makes every request body unreadable in a log.
  *
