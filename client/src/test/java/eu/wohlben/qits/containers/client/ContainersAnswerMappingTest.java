@@ -134,6 +134,22 @@ class ContainersAnswerMappingTest {
   }
 
   @Test
+  void aTakenNameIsItsOwnRefusalAndNotASpecConflict() {
+    // The two share a status and want opposite answers: a spec conflict is answered by asking again
+    // under a new ref, and a taken name is not answered by any ref of the caller's.
+    stub.script(409, """
+        {"code":"NAME_TAKEN","message":"held by qits-ci/workspace/ws-one, which is still live"}""");
+
+    ContainersAnswer<Envelope> taken = client.ensure("qits-ci", "workspace", "ws-two", ENSURE);
+
+    assertInstanceOf(Refused.class, taken);
+    assertTrue(taken.nameTaken());
+    assertFalse(taken.specConflict());
+    assertFalse(taken.imageMissing());
+    assertEquals(409, ((Refused<Envelope>) taken).status());
+  }
+
+  @Test
   void aFourHundredIsInvalidAndAFourOhFourIsARefusalWithItsStatus() {
     stub.script(400, """
         {"code":"INVALID","message":"Invalid network alias: 'Not A Label'"}""");

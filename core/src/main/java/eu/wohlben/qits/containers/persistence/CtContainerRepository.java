@@ -18,11 +18,18 @@ import java.util.List;
  *
  * <p><b>Nothing here lists by label, by image or by container name pattern.</b> The rows are the
  * registry; a sweep that could ask "which containers look like mine" would be the reap this
- * repository exists to remove. {@link #findByContainerName} is the one lookup by name, and it exists
- * for the opposite direction — turning a name a row already gave us back into that row.
+ * repository exists to remove. {@link #findLiveByContainerName} is the one lookup by name, and it
+ * exists for the opposite direction — turning a name a row already gave us back into that row.
  */
 @ApplicationScoped
 public class CtContainerRepository implements PanacheRepositoryBase<CtContainer, java.util.UUID> {
+
+  /**
+   * The index V3 put where V1 had a table-wide unique constraint on {@code container_name}, named
+   * here because the registry translates its refusal into a coded answer and a string spelled twice
+   * is a translation that stops firing the day the schema is renamed.
+   */
+  public static final String NAME_INDEX = "ct_container_name_live";
 
   /**
    * The one live row of a place, or null. "Live" is {@code desired_state <> 'ABSENT'}, which is
@@ -38,9 +45,19 @@ public class CtContainerRepository implements PanacheRepositoryBase<CtContainer,
         .firstResult();
   }
 
-  /** The row that named this container, or null. Used to turn an observation back into a row. */
-  public CtContainer findByContainerName(String containerName) {
-    return find("containerName", containerName).firstResult();
+  /**
+   * The live row holding this container name, or null.
+   *
+   * <p><b>Live, and never merely "by name".</b> Since V3 a name is unique only among live rows: a
+   * deleted place keeps its recorded name until the prune horizon passes, so a plain lookup by name
+   * could answer with a settled row while another one is running under it. Every caller here means
+   * the container that exists — the settle of a stop, and the check that refuses an ensure whose
+   * name a live row of another place already holds — so the state is part of the question.
+   */
+  public CtContainer findLiveByContainerName(String containerName) {
+    return find(
+            "containerName = ?1 and desiredState <> ?2", containerName, DesiredState.ABSENT)
+        .firstResult();
   }
 
   /**

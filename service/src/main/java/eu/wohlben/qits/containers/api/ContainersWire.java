@@ -130,7 +130,8 @@ public final class ContainersWire {
 
   /**
    * The one error shape. {@code code} is what a caller branches on — {@code SPEC_CONFLICT},
-   * {@code IMAGE_MISSING}, {@code INVALID} — and {@code message} is the sentence a person reads.
+   * {@code NAME_TAKEN}, {@code IMAGE_MISSING}, {@code INVALID} — and {@code message} is the sentence
+   * a person reads.
    */
   public record ErrorBody(String code, String message) {}
 
@@ -139,6 +140,16 @@ public final class ContainersWire {
 
   /** A spec change the workload's lifecycle policy cannot answer. 409. */
   public static final String SPEC_CONFLICT = "SPEC_CONFLICT";
+
+  /**
+   * The container name this place would claim is held by a live container of a different place. 409.
+   *
+   * <p>Its own code and not {@code SPEC_CONFLICT}, because the two ask for different answers: that
+   * one says the policy cannot replace what is here, and a caller reading it deletes and asks again
+   * under a new ref. This one says the name belongs to somebody else's running workload, which no
+   * ref of the caller's changes.
+   */
+  public static final String NAME_TAKEN = "NAME_TAKEN";
 
   /** The registry has no such image, so the run had nothing to start. 409. */
   public static final String IMAGE_MISSING = "IMAGE_MISSING";

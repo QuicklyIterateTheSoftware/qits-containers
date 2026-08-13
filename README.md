@@ -80,9 +80,15 @@ Everything lives under `/containers/api`, and a **place** is `{owner}/{workload}
 One envelope answers about a place: `{id, containerName, state:{desired,observed}, endpoint:{…},
 specHash, created}`. `endpoint.proxy` is null today and is there because the data plane arrives
 behind it. Errors are typed: 409 `SPEC_CONFLICT` for a recreate a run-once policy cannot answer,
-409 `IMAGE_MISSING` for an image nothing published, 400 `INVALID` for a value that will not go into
-an argv. **A failed read is a 5xx and never a 404** — a caller that read 404 would conclude its
-workload was never started, and start a second one.
+409 `NAME_TAKEN` for a container name a live workload of another place holds, 409 `IMAGE_MISSING`
+for an image nothing published, 400 `INVALID` for a value that will not go into an argv. **A failed
+read is a 5xx and never a 404** — a caller that read 404 would conclude its workload was never
+started, and start a second one.
+
+**A place that was deleted can be started again, immediately and under the same name.** The name is
+derived from the place, and V3 made it unique among live rows only — so a settled row keeps the name
+it ran under for history while the name itself is free the moment the place is. V1 held it until the
+row prune (P7D), which refused every delete-then-ensure a consumer runs as an uncoded 500.
 
 **`createdBefore` being required is the boot reap's whole shape.** An owner passes the instant it
 came up, so what it started afterwards — including while the sweep runs — is not in the set.

@@ -101,7 +101,7 @@ public class ContainersResource {
   @APIResponse(responseCode = "200", description = "The place, as it stands now")
   @APIResponse(responseCode = "201", description = "The place was new")
   @APIResponse(responseCode = "400", description = "A value this service will not put in an argv")
-  @APIResponse(responseCode = "409", description = "SPEC_CONFLICT or IMAGE_MISSING")
+  @APIResponse(responseCode = "409", description = "SPEC_CONFLICT, NAME_TAKEN or IMAGE_MISSING")
   public Response ensure(
       @PathParam("owner") String owner,
       @PathParam("workload") String workload,

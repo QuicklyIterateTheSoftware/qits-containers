@@ -79,8 +79,14 @@ public class CtContainer extends PanacheEntityBase implements CausedRow {
   public String ownerRef;
 
   /**
-   * The docker name, unique because docker's namespace is. It is chosen <b>before</b> the run and is
-   * what every later inspect, stop and remove addresses — never a label filter.
+   * The docker name, unique <b>among live rows</b> because docker's namespace is. It is chosen
+   * before the run and is what every later inspect, stop and remove addresses — never a label
+   * filter.
+   *
+   * <p>V3 made that uniqueness partial, the way the place already was. A settled row keeps the name
+   * it ran under so its history reads, and the name is free the moment the place is — without which
+   * a deleted place could not be started again until the prune horizon passed, because the name is
+   * derived from the place and comes out the same every time.
    */
   @Column(name = "container_name", nullable = false, length = 190)
   public String containerName;

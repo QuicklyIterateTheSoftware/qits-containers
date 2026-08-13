@@ -14,7 +14,8 @@ package eu.wohlben.qits.containers.client;
  *       row exists, it says {@code MISSING}, and it carries what docker said. That is a true answer
  *       the observer keeps working on rather than a request that failed.
  *   <li>{@link Refused} — a response arrived and said no. A 409 {@code SPEC_CONFLICT}, a 409
- *       {@code IMAGE_MISSING}, a 400 {@code INVALID}, a 403 from the owner guard, a 502 from a
+ *       {@code NAME_TAKEN}, a 409 {@code IMAGE_MISSING}, a 400 {@code INVALID}, a 403 from the
+ *       owner guard, a 502 from a
  *       proxy, a 5xx from a service whose database is down. <b>Something is answering</b>, it
  *       understood the request enough to reject it, and the status and code say what to do.
  *   <li>{@link Unreachable} — no response at all. A refused connection, a name that does not
@@ -56,7 +57,8 @@ public sealed interface ContainersAnswer<T> {
    *
    * @param status the HTTP status, so a caller can tell a 403 from a 502 without parsing text
    * @param code the service's own word — {@link ContainersWire#SPEC_CONFLICT},
-   *     {@link ContainersWire#IMAGE_MISSING}, {@link ContainersWire#INVALID} — or
+   *     {@link ContainersWire#NAME_TAKEN}, {@link ContainersWire#IMAGE_MISSING},
+   *     {@link ContainersWire#INVALID} — or
    *     {@link ContainersWire#UNREADABLE} when this client could not read the body at all. Never
    *     null: a refusal with no readable code carries the status as its word.
    * @param message the sentence a person reads, bounded and stripped of anything that could forge a
@@ -108,6 +110,15 @@ public sealed interface ContainersAnswer<T> {
   default boolean specConflict() {
     return this instanceof Refused<T> refused
         && ContainersWire.SPEC_CONFLICT.equals(refused.code());
+  }
+
+  /**
+   * The refusal that says the container name this place would claim is held by a live container of
+   * another place. A caller's own choice — wait for that one to go, or ask under a name of its own —
+   * and never a retry that helps on its own.
+   */
+  default boolean nameTaken() {
+    return this instanceof Refused<T> refused && ContainersWire.NAME_TAKEN.equals(refused.code());
   }
 
   /**

@@ -20,11 +20,15 @@ import java.util.HexFormat;
  * person reads.
  *
  * <p><b>A ref that would overflow the name is replaced by a digest of itself</b>, not truncated.
- * Truncation would map two different places onto one name, and V1 declares {@code container_name}
- * unique — so the second workload would be refused by the database rather than started. Twelve hex
- * characters of sha256 is 48 bits, which for the number of live containers one host runs is
- * collision-free in practice and, unlike a truncation, is at least detectable as a name rather than
- * as a ref.
+ * Truncation would map two different places onto one name, and a name is unique among live rows
+ * (V3's index) — so the second workload would be refused rather than started. Twelve hex characters
+ * of sha256 is 48 bits, which for the number of live containers one host runs is collision-free in
+ * practice and, unlike a truncation, is at least detectable as a name rather than as a ref.
+ *
+ * <p><b>Deterministic per place, deliberately, and that is why the uniqueness is partial.</b> The
+ * same place asked for twice derives the same name, so a place this service deleted and is asked for
+ * again wants back the name its own settled row still records. V1 declared the column unique
+ * table-wide and refused exactly that for as long as the row prune took — see V3's header.
  */
 public final class ContainerNames {
 

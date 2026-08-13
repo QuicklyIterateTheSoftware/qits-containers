@@ -16,8 +16,9 @@ import io.quarkus.runtime.annotations.RegisterForReflection;
  * {@code LogsResponse}, {@code DeleteResponse}, {@code DestroyAllResponse},
  * {@code VolumeEnvelope} and {@code EnsureRequest} are all one of those. {@link
  * ContainersWire.ErrorBody} is not: it reaches a caller only as the entity of a {@code Response} —
- * from {@code ensure}'s {@code IMAGE_MISSING} arm, from {@code InvalidRequestMapper} and from
- * {@code SpecConflictMapper} — and an entity handed to a builder is a value the build step's
+ * from {@code ensure}'s {@code IMAGE_MISSING} arm, from {@code InvalidRequestMapper}, from
+ * {@code SpecConflictMapper} and from {@code NameTakenMapper} — and an entity handed to a builder is
+ * a value the build step's
  * signature scan never sees. So a native binary would answer every 400 and every 409 with a failure
  * to serialize the body explaining them: the errors would be lost exactly when a caller needs them.
  *

@@ -16,6 +16,7 @@ import eu.wohlben.qits.db.DbRetry;
 import io.quarkus.narayana.jta.QuarkusTransaction;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import java.sql.SQLException;
 import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
@@ -251,7 +252,15 @@ public class ContainerRegistry {
    * @param recreateIfChanged whether a spec change may replace the running container. False leaves
    *     what is running alone and reports it, which is what an owner that only wants the place
    *     occupied asks for.
+   * <p><b>A place this service deleted can be ensured again, under the same name.</b> The name is
+   * derived from the place, so it is the same one every time; V3 made it unique among live rows
+   * only, which is what lets a settled row keep its history without holding the name a new
+   * {@link Step#START} needs. The name is refused only while a live container of another place
+   * answers to it — see {@link #requireNameFree}.
+   *
    * @throws SpecConflictException when a replacement is asked for and the policy forbids one
+   * @throws NameTakenException when the name this place would claim is held by a live container of
+   *     a different place
    */
   public Ensured ensure(
       String owner,
@@ -419,6 +428,7 @@ public class ContainerRegistry {
           spec.explicitName().isEmpty()
               ? ContainerNames.of(owner, workload, ownerRef)
               : spec.explicitName();
+      requireNameFree(row.containerName, owner, workload, ownerRef);
       row.createdAt = now;
       step = Step.START;
     } else if (hash.equals(row.specHash)) {
@@ -468,7 +478,23 @@ public class ContainerRegistry {
     // Flushed rather than left to the commit: an ORM flushes at commit by default, which would put
     // every statement on the far side of the one round trip nothing can place. Flushed, a lost
     // connection is a body failure — certainly not committed, so safe to run again.
-    containers.flush();
+    try {
+      containers.flush();
+    } catch (RuntimeException e) {
+      // The one collision the check above cannot see: a concurrent ensure of ANOTHER place claimed
+      // the same name and has not committed yet, so the index is what decides. Translated here so
+      // that the answer is the same word either way — a caller must not have to tell a lost race
+      // from a squatter it can read about.
+      if (nameCollision(e)) {
+        throw new NameTakenException(
+            "Cannot start "
+                + place(owner, workload, ownerRef)
+                + " as "
+                + row.containerName
+                + ": another container claimed that name while this one was being written");
+      }
+      throw e;
+    }
     return new Plan(
         row.id,
         row.containerName,
@@ -478,6 +504,55 @@ public class ContainerRegistry {
         row.observedState,
         row.specHash,
         created);
+  }
+
+  /**
+   * Refuse a new place whose name a live container of a different place already holds.
+   *
+   * <p><b>Only a live row counts</b>, which is the whole of V3: a place that was deleted keeps its
+   * recorded name in history and gives the name up with the place, so re-ensuring a place this
+   * service deleted an hour ago is a plain {@link Step#START} under the same derived name. What is
+   * still refused is a name another running container answers to — docker's name space is flat, and
+   * a second row claiming it would be a contradiction the sweeps could not resolve.
+   *
+   * <p>Before the insert rather than after the database's refusal, so the answer names both places
+   * and arrives as a code. {@link #nameCollision} covers the narrow race this check cannot see.
+   */
+  private void requireNameFree(String name, String owner, String workload, String ownerRef) {
+    CtContainer holder = containers.findLiveByContainerName(name);
+    if (holder != null) {
+      throw new NameTakenException(
+          "Cannot start "
+              + place(owner, workload, ownerRef)
+              + " as "
+              + name
+              + ": that container name is held by "
+              + place(holder.owner, holder.workload, holder.ownerRef)
+              + ", which is still live");
+    }
+  }
+
+  /**
+   * Whether a write failed on the live-name index and nothing else.
+   *
+   * <p>Read off the SQL state and the index name rather than off an ORM exception type: the state is
+   * postgres' own word for a unique violation and {@link CtContainerRepository#NAME_INDEX} is the
+   * only index this translation may speak for. A violation of the <em>place</em> index is a
+   * different statement — two ensures of one place, which the row read already resolves — and must
+   * keep travelling as itself.
+   */
+  private static boolean nameCollision(Throwable failure) {
+    for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+      if (cause instanceof SQLException sql
+          && "23505".equals(sql.getSQLState())
+          && String.valueOf(sql.getMessage()).contains(CtContainerRepository.NAME_INDEX)) {
+        return true;
+      }
+      if (cause.getCause() == cause) {
+        return false;
+      }
+    }
+    return false;
   }
 
   /** The converging volume row. Written before the volume exists, exactly as the container's is. */
@@ -967,12 +1042,18 @@ public class ContainerRegistry {
         CUTOVER_BUDGET);
   }
 
-  /** {@link #settle} addressed by container name, for the paths that only carry the name. */
+  /**
+   * {@link #settle} addressed by container name, for the paths that only carry the name.
+   *
+   * <p><b>The live row of that name</b>, never merely a row carrying it: since V3 a settled place
+   * keeps its recorded name until the prune, so a plain lookup could settle an observation onto a
+   * row that was deleted a week ago while the container it describes belongs to the one running now.
+   */
   private UUID settleByName(String containerName, ObservedState observed, String detail) {
     return DbRetry.inNewTx(
         "The settle of " + containerName,
         () -> {
-          CtContainer row = containers.findByContainerName(containerName);
+          CtContainer row = containers.findLiveByContainerName(containerName);
           if (row == null) {
             return null;
           }

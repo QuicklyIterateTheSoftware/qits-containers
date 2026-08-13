@@ -106,7 +106,15 @@ exempt, including the ones that "cannot" block.
   applied migration. V1's header records the two decisions it makes — no check constraints on enum
   columns, and the spec's environment is never persisted because it carries secrets. V2 is that rule
   being followed: one nullable `max_age_s`, no backfill, because a policy value the sweeps read has
-  to live on the row or a restart forgets it.
+  to live on the row or a restart forgets it. V3 is the correction V1 needed: `container_name` was
+  unique table-wide while the place index beside it was partial, so a soft-deleted row held its own
+  place's derived name until the prune horizon and every delete-then-ensure came back as a raw 23505
+  — a 500 with no code. The name is unique among live rows now, and the collision that is real (a
+  live row of ANOTHER place) is refused before the insert, as `NAME_TAKEN`.
+- **A lookup by container name is a lookup among LIVE rows.** Since V3 a settled row keeps its name,
+  so `findLiveByContainerName` is the only shape that question has: a plain one could settle an
+  observation onto a row deleted a week ago while the container it describes belongs to the row
+  running now.
 
 ## The worker, and the brackets
 

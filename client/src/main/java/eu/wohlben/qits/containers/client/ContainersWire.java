@@ -276,6 +276,15 @@ public final class ContainersWire {
   /** A spec change the workload's lifecycle policy cannot answer. 409. */
   public static final String SPEC_CONFLICT = "SPEC_CONFLICT";
 
+  /**
+   * The container name this place would claim is held by a live container of a different place. 409.
+   *
+   * <p>Distinct from {@link #SPEC_CONFLICT} because the two want different answers: that one is
+   * answered by deleting and asking again under a new ref, and this one is not answered by any ref
+   * of the caller's — the name belongs to somebody else's running workload until it stops.
+   */
+  public static final String NAME_TAKEN = "NAME_TAKEN";
+
   /** The registry has no such image, so the run had nothing to start. 409. */
   public static final String IMAGE_MISSING = "IMAGE_MISSING";
 

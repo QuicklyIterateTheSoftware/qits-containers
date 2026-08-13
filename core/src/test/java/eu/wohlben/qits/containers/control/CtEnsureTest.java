@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import eu.wohlben.qits.containers.entity.CtContainer;
+import eu.wohlben.qits.containers.entity.DesiredState;
 import eu.wohlben.qits.containers.entity.ObservedState;
 import eu.wohlben.qits.containers.spec.ContainerSpec;
 import eu.wohlben.qits.containers.spec.LifecyclePolicy;
@@ -39,7 +40,7 @@ public class CtEnsureTest extends CtTestSupport {
                 QuarkusTransaction.requiringNew()
                     .call(
                         () -> {
-                          CtContainer row = containers.findByContainerName(name);
+                          CtContainer row = containers.findLiveByContainerName(name);
                           return row == null ? "no row at all" : row.observedState.name();
                         })));
 
@@ -285,6 +286,76 @@ public class CtEnsureTest extends CtTestSupport {
 
     assertTrue(refused.getMessage().contains("EPHEMERAL"));
     assertEquals(List.of(), driver.calls(), "the refusal happens before anything docker-side");
+  }
+
+  @Test
+  public void aDeletedPlaceIsStartedAgainUnderTheSameNameRatherThanRefusedForAWeek() {
+    // The flow a consumer really runs: delete a container, then ask for the place again. The name
+    // is derived from the place, so the second ask wants back the name the settled row still
+    // records — and V1's table-wide unique refused exactly that until RowPrune released the row a
+    // week later, as an uncoded 500.
+    ContainerRegistry.Ensured first =
+        registry.ensure(
+            OWNER, WORKLOAD, "run-again", spec("alpine:3"), LifecyclePolicy.explicitLifetime(), false);
+    registry.delete(OWNER, WORKLOAD, "run-again", false, false);
+    driver.reset();
+
+    ContainerRegistry.Ensured second =
+        registry.ensure(
+            OWNER, WORKLOAD, "run-again", spec("alpine:3"), LifecyclePolicy.explicitLifetime(), false);
+
+    assertEquals(
+        nameOf(OWNER, WORKLOAD, "run-again"),
+        second.containerName(),
+        "the name is derived from the place, so the place coming back brings the name back");
+    assertEquals(first.containerName(), second.containerName());
+    assertTrue(second.created(), "the settled row is history; this is a new row and a clean START");
+    assertNotEquals(first.rowId(), second.rowId());
+    assertEquals(ObservedState.RUNNING, second.observed());
+    assertEquals(
+        List.of("run:" + second.containerName(), "inspect:" + second.containerName()),
+        driver.calls(),
+        "a START and not a replacement: nothing is stopped or removed on the way");
+    assertEquals(
+        DesiredState.ABSENT,
+        row(first.rowId()).desiredState,
+        "the first row is still there, still carrying the name it ran under");
+    assertEquals(first.containerName(), row(first.rowId()).containerName);
+  }
+
+  @Test
+  public void aNameALiveContainerOfAnotherPlaceHoldsIsRefusedWithItsOwnCode() {
+    // The collision that is honest, and the only one left: docker's name space is flat, so a second
+    // live row claiming one name would be a contradiction no sweep could resolve.
+    ContainerSpec squatter =
+        ContainerSpec.builder("alpine:3").network("qits-net").name("qits-shared-agent").build();
+    registry.ensure(
+        OWNER, "workspace", "ws-one", squatter, LifecyclePolicy.explicitLifetime(), false);
+    driver.reset();
+
+    NameTakenException refused =
+        assertThrows(
+            NameTakenException.class,
+            () ->
+                registry.ensure(
+                    OWNER,
+                    "workspace",
+                    "ws-two",
+                    squatter,
+                    LifecyclePolicy.explicitLifetime(),
+                    false));
+
+    assertTrue(refused.getMessage().contains("qits-shared-agent"));
+    assertTrue(refused.getMessage().contains("ws-one"), "the refusal names who holds the name");
+    assertEquals(List.of(), driver.calls(), "the refusal happens before anything docker-side");
+
+    // And it stops being a refusal the moment the holder is gone, which is the whole of V3.
+    registry.delete(OWNER, "workspace", "ws-one", false, false);
+    ContainerRegistry.Ensured moved =
+        registry.ensure(
+            OWNER, "workspace", "ws-two", squatter, LifecyclePolicy.explicitLifetime(), false);
+    assertEquals("qits-shared-agent", moved.containerName());
+    assertTrue(moved.created());
   }
 
   @Test

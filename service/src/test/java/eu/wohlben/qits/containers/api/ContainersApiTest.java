@@ -143,6 +143,52 @@ class ContainersApiTest {
   }
 
   @Test
+  void aNameALiveContainerOfAnotherPlaceHoldsIsAFourOhNineACallerCanBranchOn() {
+    // The refusal that is left after V3, and the one qits-projects pre-checks for. Until it had a
+    // code it was a raw 23505 the retry rethrew: a 500 with a null code, which no consumer can act
+    // on — and every delete-then-ensure of one place looked the same way for a week.
+    String squatting =
+        """
+        {"spec":{"image":"alpine:3","network":"qits-net","explicitName":"qits-shared-agent"},
+         "policy":{"type":"EXPLICIT"},"recreate":"never"}""";
+
+    given()
+        .contentType(ContentType.JSON)
+        .body(squatting)
+        .when()
+        .put(PLACE)
+        .then()
+        .statusCode(201);
+
+    given()
+        .contentType(ContentType.JSON)
+        .body(squatting)
+        .when()
+        .put("/containers/api/containers/qits-ci/step/run-2")
+        .then()
+        .statusCode(409)
+        .body("code", is("NAME_TAKEN"))
+        .body("message", containsString("qits-shared-agent"));
+  }
+
+  @Test
+  void aPlaceThatWasDeletedIsStartedAgainUnderTheSameNameRatherThanRefused() {
+    given().contentType(ContentType.JSON).body(EXPLICIT).when().put(PLACE).then().statusCode(201);
+    given().when().delete(PLACE).then().statusCode(200);
+
+    given()
+        .contentType(ContentType.JSON)
+        .body(EXPLICIT)
+        .when()
+        .put(PLACE)
+        .then()
+        .statusCode(201)
+        .body("containerName", is(ContainerNames.of(OWNER, WORKLOAD, REF)))
+        .body("created", is(true))
+        .body("state.observed", is("RUNNING"));
+  }
+
+  @Test
   void aBodyWithNoInitFieldStartsAContainerWithoutOneAndABodyWithItAsksForTini() {
     // The pair of bodies a rollout really sees: every caller written before the field existed sends
     // the first shape forever, and an absent field has to keep meaning what it meant then. A 400
