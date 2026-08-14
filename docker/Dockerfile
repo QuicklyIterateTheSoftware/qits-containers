@@ -67,10 +67,11 @@
 # The builder JDK MUST be 25: native-image cannot read bytecode newer than its own JDK, and this
 # project targets release 25.
 #
-# `localhost:8082/quay/…` is qits-platform-mirror's pull-through mirror of quay.io: the first build
-# fetches the image from upstream and caches it, every later build is served from local disk. The tag
-# is upstream's, unchanged — the mirror revalidates it, so `jdk-25` still moves when quay moves it.
-FROM localhost:8082/quay/quarkus/ubi9-quarkus-mandrel-builder-image:jdk-25 AS build
+# `mirror.dev.localhost:8080/quay/…` is qits-platform-mirror's pull-through mirror of quay.io: the
+# first build fetches the image from upstream and caches it, every later build is served from local
+# disk. The tag is upstream's, unchanged — the mirror revalidates it, so `jdk-25` still moves when
+# quay moves it.
+FROM mirror.dev.localhost:8080/quay/quarkus/ubi9-quarkus-mandrel-builder-image:jdk-25 AS build
 USER root
 WORKDIR /src
 
@@ -106,15 +107,15 @@ COPY . .
 # `-s .qits-maven-settings.xml` is what lets the `qits-maven` repository be an http:// URL at all:
 # Maven blocks external http repositories by default, and an exact repository-id mirror is the one
 # thing that outranks the blocker. The settings file permits that one id and nothing else.
-ARG QITS_MAVEN_REPOSITORY_URL=http://localhost:8081/artifacts/maven/maven
+ARG QITS_MAVEN_REPOSITORY_URL=http://registry.dev.localhost:8080/artifacts/maven/maven
 ENV QITS_MAVEN_REPOSITORY_URL=$QITS_MAVEN_REPOSITORY_URL
 RUN ./mvnw -B -ntp -s .qits-maven-settings.xml -pl service -am package -Dnative -DskipTests \
       -Dqits.maven.repository.url="$QITS_MAVEN_REPOSITORY_URL" \
       -Dquarkus.native.native-image-xmx=4g
 
 # --- runtime --------------------------------------------------------------------------------------
-# `localhost:8082/redhat/…` is the same mirror, pointed at registry.access.redhat.com.
-FROM localhost:8082/redhat/ubi9/ubi-minimal:9.6
+# `mirror.dev.localhost:8080/redhat/…` is the same mirror, pointed at registry.access.redhat.com.
+FROM mirror.dev.localhost:8080/redhat/ubi9/ubi-minimal:9.6
 WORKDIR /work
 
 # The docker CLI comes from Docker's own repository because no UBI repository carries a

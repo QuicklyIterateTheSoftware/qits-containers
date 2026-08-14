@@ -28,7 +28,7 @@
          monorepo and no parent to inherit from. -->
     <groupId>eu.wohlben.qits</groupId>
     <artifactId>qits-containers</artifactId>
-    <version>2026.812.173301</version>
+    <version>2026.814.73521</version>
     <packaging>pom</packaging>
     <name>qits-containers</name>
 
@@ -81,7 +81,7 @@
              flag day: a second store appears in the deployment spec and in every suite at once. -->
         <qits.eventstream.version>2026.811.155429</qits.eventstream.version>
 
-        <qits.maven.repository.url>http://localhost:8081/artifacts/maven/maven</qits.maven.repository.url>
+        <qits.maven.repository.url>http://registry.dev.localhost:8080/artifacts/maven/maven</qits.maven.repository.url>
 
         <!-- Real PostgreSQL binaries, resolved as ordinary Maven artifacts and spawned as a child
              process by the suite. The platform convention: a clone tests green with NO DOCKER, which
