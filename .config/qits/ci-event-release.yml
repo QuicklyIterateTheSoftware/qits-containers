@@ -118,9 +118,16 @@ steps:
       # Same host doctrine as ci-post-receive.yml: --network host, NOT a custom network, because
       # buildkit refuses custom networks on a build; and the maven address derived from the same
       # injected env the image tag uses, or the platform jars cannot be resolved inside the build.
+      # And the same credential doctrine: a SECRET MOUNT, never a build arg, because an arg is
+      # recorded in the history of a pullable image. The launcher injects the run's commissioned idp
+      # client as $QITS_COMMISSIONED_CLIENT_ID/$QITS_COMMISSIONED_CLIENT_SECRET. Unconditional — a
+      # missing env source is NOT a buildx error, measured on v0.36.1 — so it is inert until a run
+      # carries the pair. ci-post-receive.yml has the same two flags; keep them matched.
       ref="$QITS_REGISTRY/$QITS_IMAGE_REPOSITORY/qits-containers:$version"
       docker build --network host \
         --build-arg QITS_MAVEN_REPOSITORY_URL="http://$QITS_REGISTRY/artifacts/maven/maven" \
+        --secret id=qits-client-id,env=QITS_COMMISSIONED_CLIENT_ID \
+        --secret id=qits-client-secret,env=QITS_COMMISSIONED_CLIENT_SECRET \
         -t "$ref" -f docker/Dockerfile .
       docker push "$ref"
       # NO `docker rmi "$ref"`: on a CI host it frees nothing — the layers stay in the builder's

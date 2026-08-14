@@ -109,7 +109,16 @@ COPY . .
 # thing that outranks the blocker. The settings file permits that one id and nothing else.
 ARG QITS_MAVEN_REPOSITORY_URL=http://registry.dev.localhost:8080/artifacts/maven/maven
 ENV QITS_MAVEN_REPOSITORY_URL=$QITS_MAVEN_REPOSITORY_URL
-RUN ./mvnw -B -ntp -s .qits-maven-settings.xml -pl service -am package -Dnative -DskipTests \
+#
+# The same settings file also carries the CREDENTIAL, and the two secret mounts below are where it
+# comes from: they put the CI run's commissioned client into THIS `RUN`'s environment and nowhere
+# else — not a layer, not the image history, which is what a `--build-arg` could never promise on a
+# pullable image. Absent secrets leave both variables unset and the four jars resolve anonymously —
+# today's state, and a developer host's permanently, because Maven sends credentials only when a
+# repository answers 401 and the registry does not yet.
+RUN --mount=type=secret,id=qits-client-id,env=QITS_MAVEN_AUTH_USR \
+    --mount=type=secret,id=qits-client-secret,env=QITS_MAVEN_AUTH_PSW \
+    ./mvnw -B -ntp -s .qits-maven-settings.xml -pl service -am package -Dnative -DskipTests \
       -Dqits.maven.repository.url="$QITS_MAVEN_REPOSITORY_URL" \
       -Dquarkus.native.native-image-xmx=4g
 
