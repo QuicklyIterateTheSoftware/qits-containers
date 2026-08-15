@@ -61,7 +61,7 @@ public final class TunnelProtocol {
    * The per-tunnel secret, presented as a handshake header on the control socket.
    *
    * <p><b>This is where this contract deliberately departs from the two it is ported from.</b>
-   * qits-projects' and qits-workspaces' control sockets are token-free and name their caller with a
+   * qits-projects' and qits-workspaces' control sockets require the same machine role and name their caller with a
    * <em>path parameter</em>, so anything on {@code qits-net} can claim to be any project's or any
    * workspace's daemon — a known weakness both repos carry and record. This is a fresh contract with
    * no running container to be compatible with, so it does not reproduce it: the row id in the path

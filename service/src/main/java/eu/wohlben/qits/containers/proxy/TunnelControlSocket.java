@@ -35,11 +35,9 @@ import org.jboss.logging.Logger;
  *
  * <p>The row id in the path says which place is being claimed. It is not the authentication, and
  * this is the one place this port deliberately departs from what it was ported from: qits-projects'
- * {@code AgentControlSocket} and qits-workspaces' {@code DaemonControlSocket} are token-free and
- * take their caller's identity from the path parameter alone, so anything on {@code qits-net} can
- * claim to be any project's or any workspace's daemon. Both repositories record that as a known
- * weakness they carry until platform machine auth lands. There is no container running against
- * <em>this</em> contract yet, so there is nothing to be compatible with and no reason to inherit it:
+ * {@code AgentControlSocket} and qits-workspaces' {@code DaemonControlSocket} require the same
+ * machine role. There is no container running against <em>this</em> contract yet, so there is
+ * nothing to be compatible with and no reason to weaken it:
  * {@link TunnelProtocol#SECRET_HEADER} carries a per-tunnel secret and it is checked first.
  *
  * <p><b>The order of the three checks is deliberate.</b> The gate, then the secret, then the row. A
@@ -54,6 +52,7 @@ import org.jboss.logging.Logger;
  * confusion between "gone" and "could not find out" this repository refuses everywhere else.
  */
 @WebSocket(path = TunnelProtocol.CONTROL_SOCKET_PATH_PREFIX + "{rowId}")
+@jakarta.annotation.security.RolesAllowed("qits:system")
 public class TunnelControlSocket {
 
   private static final Logger LOG = Logger.getLogger(TunnelControlSocket.class);

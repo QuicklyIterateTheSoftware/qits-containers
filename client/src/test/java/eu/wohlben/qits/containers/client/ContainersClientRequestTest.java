@@ -41,7 +41,12 @@ class ContainersClientRequestTest {
   @BeforeEach
   void start() throws IOException {
     stub = new StubContainersServer();
-    client = new ContainersClient(stub.url(), Duration.ofSeconds(5), Duration.ofSeconds(5), null);
+    client =
+        new ContainersClient(
+            stub.url(),
+            Duration.ofSeconds(5),
+            Duration.ofSeconds(5),
+            () -> Optional.of("test-machine-token"));
   }
 
   @AfterEach
@@ -110,7 +115,10 @@ class ContainersClientRequestTest {
   void theBaseUrlCarriesNoPathAndATrailingSlashIsToleratedRatherThanDoubled() {
     ContainersClient slashed =
         new ContainersClient(
-            stub.url() + "/", Duration.ofSeconds(5), Duration.ofSeconds(5), null);
+            stub.url() + "/",
+            Duration.ofSeconds(5),
+            Duration.ofSeconds(5),
+            () -> Optional.of("test-machine-token"));
     slashed.status("qits-ci", "step", "run-1");
 
     assertEquals("/containers/api/containers/qits-ci/step/run-1", stub.last().path());
@@ -197,29 +205,21 @@ class ContainersClientRequestTest {
   }
 
   @Test
-  void noTokenSourceAndAnEmptyOneBothSendNoHeaderAtAll() {
-    // The shipped posture while the service's rollout gate is off: network trust, no bearer.
-    client.status("qits-ci", "step", "run-1");
-    assertNull(stub.last().header("Authorization"));
-
+  void noTokenSourceAndAnEmptyOrBlankOneRefuseTheCall() {
     ContainersClient none =
         new ContainersClient(
             stub.url(), Duration.ofSeconds(5), Duration.ofSeconds(5), TokenSource.none());
-    none.status("qits-ci", "step", "run-1");
-    assertNull(stub.last().header("Authorization"));
+    assertThrows(IllegalStateException.class, () -> none.status("qits-ci", "step", "run-1"));
 
     // A blank token is an absent one, not a header saying "Bearer ".
     ContainersClient blank =
         new ContainersClient(
             stub.url(), Duration.ofSeconds(5), Duration.ofSeconds(5), () -> Optional.of("  "));
-    blank.status("qits-ci", "step", "run-1");
-    assertNull(stub.last().header("Authorization"));
+    assertThrows(IllegalStateException.class, () -> blank.status("qits-ci", "step", "run-1"));
   }
 
   @Test
-  void aTokenSourceThatThrowsCostsTheHeaderAndNotTheCall() {
-    // A 401 from the service is a better failure than an exception on the caller's worker thread:
-    // it is reportable, it is one of the four answers, and it names the real problem.
+  void aTokenSourceThatThrowsRefusesTheCall() {
     ContainersClient broken =
         new ContainersClient(
             stub.url(),
@@ -229,8 +229,7 @@ class ContainersClientRequestTest {
               throw new IllegalStateException("no idp");
             });
 
-    assertTrue(broken.status("qits-ci", "step", "run-1").succeeded());
-    assertNull(stub.last().header("Authorization"));
+    assertThrows(IllegalStateException.class, () -> broken.status("qits-ci", "step", "run-1"));
   }
 
   @Test

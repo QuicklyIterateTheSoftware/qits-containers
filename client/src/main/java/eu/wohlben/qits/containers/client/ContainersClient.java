@@ -120,8 +120,8 @@ public final class ContainersClient {
    *     slash is tolerated rather than doubled.
    * @param requestTimeout the default deadline for every call except {@code ensure}
    * @param ensureTimeout the default deadline for {@code ensure}, which may be pulling an image
-   * @param tokens where a machine token comes from, or null for none — the shipped posture while
-   *     the service's rollout gate is off
+   * @param tokens where the required machine token comes from. A null, empty, blank, or failing
+   *     source makes the request fail before any network call is made.
    */
   public ContainersClient(
       String url, Duration requestTimeout, Duration ensureTimeout, TokenSource tokens) {
@@ -382,7 +382,7 @@ public final class ContainersClient {
         HttpRequest.newBuilder(URI.create(base + path))
             .timeout(deadline == null ? requestTimeout : deadline)
             .header("Accept", "application/json");
-    bearer().ifPresent(token -> builder.header("Authorization", "Bearer " + token));
+    builder.header("Authorization", "Bearer " + bearer());
     UUID cause = CausationScope.current();
     if (cause != null) {
       builder.header(CausationHeader.NAME, cause.toString());
@@ -390,16 +390,16 @@ public final class ContainersClient {
     return builder;
   }
 
-  /** The token, or none. A source that throws is a source with nothing to give. */
-  private Optional<String> bearer() {
+  /** The required token. Authentication failures stop the call instead of silently widening it. */
+  private String bearer() {
     try {
       Optional<String> token = tokens.bearer();
-      return token == null ? Optional.empty() : token.filter(value -> !value.isBlank());
+      if (token == null || token.isEmpty() || token.get().isBlank()) {
+        throw new IllegalStateException("the containers client has no machine token");
+      }
+      return token.get();
     } catch (RuntimeException e) {
-      // A 401 from the service is a better failure than an exception on the caller's worker: it is
-      // reportable, it is one of the four answers, and it names the real problem.
-      LOG.warnf("The token source refused to answer, calling unauthenticated: %s", e.toString());
-      return Optional.empty();
+      throw new IllegalStateException("the containers client could not obtain a machine token", e);
     }
   }
 

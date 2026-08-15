@@ -31,6 +31,7 @@ import org.eclipse.microprofile.openapi.annotations.responses.APIResponse;
 // class-level one would answer 415 to a request that is complete.
 @Path("/volumes")
 @Produces(MediaType.APPLICATION_JSON)
+@jakarta.annotation.security.RolesAllowed("qits:system")
 public class VolumesResource {
 
   @Inject OwnerGuard guard;
