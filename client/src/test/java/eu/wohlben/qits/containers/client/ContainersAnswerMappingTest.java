@@ -19,6 +19,7 @@ import eu.wohlben.qits.containers.client.ContainersWire.Spec;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
+import java.util.Optional;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -53,7 +54,7 @@ class ContainersAnswerMappingTest {
   @BeforeEach
   void start() throws IOException {
     stub = new StubContainersServer();
-    client = client(stub.url(), null);
+    client = client(stub.url(), () -> Optional.of("mapping-test-token"));
   }
 
   @AfterEach
@@ -206,7 +207,8 @@ class ContainersAnswerMappingTest {
   void nothingAnsweringIsUnreachableForEveryRouteAndNeverARefusal() {
     // Port 1 is reserved and nothing binds it. A connection refused is the cheapest honest
     // "no response arrived" there is.
-    ContainersClient nowhere = client("http://127.0.0.1:1", null);
+    ContainersClient nowhere = client(
+        "http://127.0.0.1:1", () -> Optional.of("mapping-test-token"));
 
     assertInstanceOf(Unreachable.class, nowhere.ensure("qits-ci", "step", "run-1", ENSURE));
     assertInstanceOf(Unreachable.class, nowhere.status("qits-ci", "step", "run-1"));
@@ -234,7 +236,9 @@ class ContainersAnswerMappingTest {
     // The 2026-08-10 failure exactly: an alias that resolves nowhere. Every attempt raises out of
     // send(), and a status code is the only thing that makes an attempt a refusal.
     ContainersClient nowhere =
-        client("http://qits-containers-that-does-not-exist.invalid:8080", null);
+        client(
+            "http://qits-containers-that-does-not-exist.invalid:8080",
+            () -> Optional.of("mapping-test-token"));
     assertInstanceOf(Unreachable.class, nowhere.status("qits-ci", "step", "run-1"));
   }
 
