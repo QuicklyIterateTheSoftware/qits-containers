@@ -205,21 +205,33 @@ class ContainersClientRequestTest {
   }
 
   @Test
-  void noTokenSourceAndAnEmptyOrBlankOneRefuseTheCall() {
+  void noTokenSourceAndAnEmptyOrBlankOneSendNoHeaderAtAll() {
+    // The call still goes out. Every route of the service carries @RolesAllowed, so a bare request
+    // comes back 401 — one of the four answers, naming the real problem — rather than an exception
+    // on the caller's worker thread.
+    ContainersClient nothing =
+        new ContainersClient(stub.url(), Duration.ofSeconds(5), Duration.ofSeconds(5), null);
+    nothing.status("qits-ci", "step", "run-1");
+    assertNull(stub.last().header("Authorization"));
+
     ContainersClient none =
         new ContainersClient(
             stub.url(), Duration.ofSeconds(5), Duration.ofSeconds(5), TokenSource.none());
-    assertThrows(IllegalStateException.class, () -> none.status("qits-ci", "step", "run-1"));
+    none.status("qits-ci", "step", "run-1");
+    assertNull(stub.last().header("Authorization"));
 
     // A blank token is an absent one, not a header saying "Bearer ".
     ContainersClient blank =
         new ContainersClient(
             stub.url(), Duration.ofSeconds(5), Duration.ofSeconds(5), () -> Optional.of("  "));
-    assertThrows(IllegalStateException.class, () -> blank.status("qits-ci", "step", "run-1"));
+    blank.status("qits-ci", "step", "run-1");
+    assertNull(stub.last().header("Authorization"));
   }
 
   @Test
-  void aTokenSourceThatThrowsRefusesTheCall() {
+  void aTokenSourceThatThrowsCostsTheHeaderAndNotTheCall() {
+    // A 401 from the service is a better failure than an exception on the caller's worker thread:
+    // it is reportable, it is one of the four answers, and it names the real problem.
     ContainersClient broken =
         new ContainersClient(
             stub.url(),
@@ -229,7 +241,8 @@ class ContainersClientRequestTest {
               throw new IllegalStateException("no idp");
             });
 
-    assertThrows(IllegalStateException.class, () -> broken.status("qits-ci", "step", "run-1"));
+    assertTrue(broken.status("qits-ci", "step", "run-1").succeeded());
+    assertNull(stub.last().header("Authorization"));
   }
 
   @Test

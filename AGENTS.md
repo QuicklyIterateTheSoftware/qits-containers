@@ -34,6 +34,14 @@ answer to "who is calling". A second answer invented in this repository would be
 token the platform has a standing decision against. It brings no server and no transport —
 quarkus-oidc validates the bearer, and the jar reads the identity that validation leaves behind.
 
+**The suite mints its own tokens, and they carry `groups`.** `api/MachineTokens` signs RS256 with
+the key pair in `service/src/test/resources/machine-token-*.pem`, and `MachineGuardProfile` hands
+quarkus-oidc the public half, so the enforced path runs end to end with no qits-idp to reach. Those
+PEMs are test fixtures, not credentials. A token minted with only `iss`/`sub`/`aud` authenticates
+perfectly and is then refused 403 on every route — the failure that kept this repository red through
+its first two CI runs — so `token(...)` mints the two system roles and `rolelessToken(...)` mints the
+empty set on purpose, to assert that refusal rather than meet it by accident.
+
 ## The two invariants this repo exists for
 
 **1. Adopt on boot, never reap.** No code path may remove a container that no registry row names.
@@ -78,13 +86,29 @@ exempt, including the ones that "cannot" block.
   an ordinary bean would be an ambiguous resolution and a globally enabled alternative would take
   the daemon away from the one test that needs it, so each suite names the driver it means in its
   profile's `getEnabledAlternatives()`.
-- **Every route is guarded, reads included** (`api/OwnerGuard`). The rest of the fleet guards its
-  writes and leaves its reads open because a person reads through the gateway; nothing here is read
-  by a person, and an inventory of running containers is as much a module's own as the containers
-  are. The owner in the path is compared against the machine token's **subject, whole** —
-  `dev-qits-ci` and `prod-qits-ci` are two owners, and that prefix is what keeps two environments
-  sharing one docker daemon apart. With the rollout gate off (the shipped default) the path owner is
-  trusted, exactly as every sibling behaves.
+- **Every route is guarded, reads included** — and it is guarded **twice**. The rest of the fleet
+  guards its writes and leaves its reads open because a person reads through the gateway; nothing
+  here is read by a person, and an inventory of running containers is as much a module's own as the
+  containers are.
+
+  **The outer half is `@RolesAllowed("qits:system")`**, on `ContainersResource`, `VolumesResource`
+  and `proxy/TunnelControlSocket` — the fleet's coarse machine role, which qits-idp copies from
+  `qits.idp.client.<id>.roles` into the token's `groups` claim and quarkus-oidc reads as roles with
+  no configuration at all. It does **not** follow the rollout gate: it is on in every posture, and
+  what keeps a credential-free `./mvnw verify` green is qits-auth-core's `%test` dev user, which
+  holds every platform role. The sibling control sockets carry the same annotation, so the tunnel is
+  not a departure.
+
+  **The inner half is `api/OwnerGuard`**: the owner in the path compared against the machine token's
+  **subject, whole** — `dev-qits-ci` and `prod-qits-ci` are two owners, and that prefix is what keeps
+  two environments sharing one docker daemon apart. With the rollout gate off (the shipped default)
+  the path owner is trusted, exactly as every sibling behaves.
+
+  **Three doors, and knowing which shut is how a grant is debugged.** A token minted for another
+  service is refused **401** by `quarkus.oidc.token.audience` before any identity exists. A token
+  addressed here whose client was granted no roles authenticates and is refused **403** by
+  `@RolesAllowed`. A token holding the role but belonging to another owner is refused **403** by
+  `OwnerGuard`. No credential at all is 401. `MachineGuardTest` pins all four.
 - **The datasource, the persistence unit and the Flyway lineage live in `core`**, shipped as
   ordinal-100 defaults in `META-INF/microprofile-config.properties`. The app's own settings are in
   `service/src/main/resources/application.properties` at ordinal 250. Never restate one file's key
@@ -226,6 +250,15 @@ The client is **forward compatible in the direction the platform deploys in**: u
 are ignored and an unknown enum constant reads as null (`ContainersJson`, which says what that
 costs). The service ships first; a client that refused a body it did not fully recognise would
 break every consumer on the day the service was deployed.
+
+**A missing machine token costs the HEADER and never the call**, and that rule belongs to rule 3
+below rather than to the guard. `TokenSource` answering empty, null, blank or by throwing sends the
+request bare; every route answers 401, which is a `Refused` naming the real problem, reportable, and
+one of the four answers. Refusing inside the client would be a fifth answer thrown on a consumer's
+own worker thread, and it would guard nothing the service does not already guard — a consumer whose
+own oidc client is switched off would stop being able to start a container instead of being told
+why. Measured: it was written that way for one commit and took 18 of this repo's own tests down
+with it.
 
 **3. Four answers, and the last two never merge.** `ContainersAnswer` is a sealed interface —
 `Created`, `Ready`, `Refused`, `Unreachable` — and it carries **no `retryable()`**, for the reason
