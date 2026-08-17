@@ -25,13 +25,19 @@ import org.junit.jupiter.api.Test;
  * two owners — and that prefix is exactly what keeps two environments sharing one docker daemon
  * from reaching each other's containers.
  *
- * <p><b>Two doors, and this suite pins which one shuts first.</b> A token minted for another
- * service is refused by {@code quarkus.oidc.token.audience} before {@code MachineAuth} ever sees the
- * identity, so the answer is a 401 challenge rather than the guard's own 403. {@code MachineAuth}'s
- * audience check is the second belt, reachable only if that validation is ever loosened, and it is
- * asserted nowhere here because it cannot be produced without loosening it. The 403 this suite does
- * assert is the owner guard's, which is this service's own decision and the one that could be
- * dropped by a new route forgetting to call it.
+ * <p><b>Three doors, and this suite pins which one shuts first.</b> A token minted for another
+ * service is refused by {@code quarkus.oidc.token.audience} before any identity is built, so the
+ * answer is a 401 challenge. A token addressed here but granted no roles authenticates and is
+ * refused 403 by the {@code @RolesAllowed("qits:system")} both resources carry — qits-idp copies a
+ * client's {@code roles} into the token's {@code groups} claim and quarkus-oidc reads that claim as
+ * roles with no configuration at all. A token that holds the role and is somebody else's is refused
+ * 403 by {@link OwnerGuard}, which is this service's own decision and the one a new route could drop
+ * by forgetting to call it. {@code MachineAuth}'s audience check is a fourth belt behind the first,
+ * reachable only if that validation is ever loosened, so it is asserted nowhere here.
+ *
+ * <p>Two of those three answer 403 and the difference is which grant is missing — the role, or the
+ * ownership. That is the distinction an operator needs to tell a missing idp grant from a caller
+ * addressing rows it does not own.
  */
 @QuarkusTest
 @TestProfile(MachineGuardProfile.class)
@@ -82,6 +88,38 @@ class MachineGuardTest {
         .put(OWN_PLACE)
         .then()
         .statusCode(401);
+  }
+
+  @Test
+  void aTokenGrantedNoRolesIsForbiddenFromItsOwnRows() {
+    // A client id qits-idp knows with no `.roles` line beside it mints exactly this: correctly
+    // signed, correctly addressed, empty `groups`. It is this owner's own token and it still covers
+    // nothing, because @RolesAllowed shuts before OwnerGuard is ever asked. A 403 rather than the
+    // 401 an absent token gets, which is what tells a missing grant from a missing sender.
+    String roleless = "Bearer " + MachineTokens.rolelessToken(OWNER, OWN_AUDIENCE);
+
+    given()
+        .contentType(ContentType.JSON)
+        .header("Authorization", roleless)
+        .body(SPEC)
+        .when()
+        .put(OWN_PLACE)
+        .then()
+        .statusCode(403);
+
+    given().header("Authorization", roleless).when().get(OWN_PLACE).then().statusCode(403);
+    given()
+        .header("Authorization", roleless)
+        .when()
+        .get("/containers/api/containers/dev-qits-ci")
+        .then()
+        .statusCode(403);
+    given()
+        .header("Authorization", roleless)
+        .when()
+        .get("/containers/api/volumes/dev-qits-ci/whatever")
+        .then()
+        .statusCode(403);
   }
 
   @Test

@@ -120,8 +120,9 @@ public final class ContainersClient {
    *     slash is tolerated rather than doubled.
    * @param requestTimeout the default deadline for every call except {@code ensure}
    * @param ensureTimeout the default deadline for {@code ensure}, which may be pulling an image
-   * @param tokens where the required machine token comes from. A null, empty, blank, or failing
-   *     source makes the request fail before any network call is made.
+   * @param tokens where the machine token comes from, or null for none. A null, empty, blank or
+   *     failing source costs the header and never the call: the service refuses the bare request
+   *     with a 401, which is a {@code Refused} answer rather than an exception on a worker thread.
    */
   public ContainersClient(
       String url, Duration requestTimeout, Duration ensureTimeout, TokenSource tokens) {
@@ -382,7 +383,7 @@ public final class ContainersClient {
         HttpRequest.newBuilder(URI.create(base + path))
             .timeout(deadline == null ? requestTimeout : deadline)
             .header("Accept", "application/json");
-    builder.header("Authorization", "Bearer " + bearer());
+    bearer().ifPresent(token -> builder.header("Authorization", "Bearer " + token));
     UUID cause = CausationScope.current();
     if (cause != null) {
       builder.header(CausationHeader.NAME, cause.toString());
@@ -390,16 +391,22 @@ public final class ContainersClient {
     return builder;
   }
 
-  /** The required token. Authentication failures stop the call instead of silently widening it. */
-  private String bearer() {
+  /**
+   * The token, or none. A source that throws is a source with nothing to give.
+   *
+   * <p><b>A missing token costs the header and never the call.</b> Every route of qits-containers
+   * carries {@code @RolesAllowed("qits:system")}, so a bare request comes back 401 — a
+   * {@link ContainersAnswer.Refused} that names the real problem, reaches the caller as one of the
+   * four answers, and is reportable. Refusing here instead would be a fifth answer, thrown on the
+   * caller's own worker thread, and it would guard nothing the service does not already guard.
+   */
+  private Optional<String> bearer() {
     try {
       Optional<String> token = tokens.bearer();
-      if (token == null || token.isEmpty() || token.get().isBlank()) {
-        throw new IllegalStateException("the containers client has no machine token");
-      }
-      return token.get();
+      return token == null ? Optional.empty() : token.filter(value -> !value.isBlank());
     } catch (RuntimeException e) {
-      throw new IllegalStateException("the containers client could not obtain a machine token", e);
+      LOG.warnf("The token source refused to answer, calling unauthenticated: %s", e.toString());
+      return Optional.empty();
     }
   }
 
