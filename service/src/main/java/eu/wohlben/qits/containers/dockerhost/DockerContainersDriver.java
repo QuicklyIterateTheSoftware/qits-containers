@@ -8,6 +8,7 @@ import eu.wohlben.qits.containers.spec.ContainerSpec;
 import eu.wohlben.qits.containers.spec.LifecyclePolicy;
 import eu.wohlben.qits.containers.spec.VolumeSpec;
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
@@ -84,6 +85,13 @@ public class DockerContainersDriver implements ContainersDriver {
   @ConfigProperty(name = "qits.containers.container-runtime")
   String runtime;
 
+  /**
+   * Which group owns the host's docker socket, for the workloads that declared the bind. Injected
+   * rather than read here because it is a fact about the host this process stands on and not a
+   * property of the seam — and it reaches the argv only inside {@code hostDockerSocket}'s own arm.
+   */
+  @Inject DockerSocketGroup socketGroup;
+
   @Override
   public Started run(
       ContainerSpec spec,
@@ -94,7 +102,7 @@ public class DockerContainersDriver implements ContainersDriver {
     ContainerProcess.Result result =
         ContainerProcess.run(
             null,
-            DockerArgv.run(runtime, name, spec, labels, policy),
+            DockerArgv.run(runtime, name, spec, labels, policy, socketGroup.value()),
             timeout,
             ContainersTimeouts.RUN_MAX_CHARS);
     if (!succeeded(result)) {

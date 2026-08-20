@@ -298,6 +298,21 @@ not. Neither is a key in the deployment grammar; both are run-args.
 Without the socket the service still starts and still serves. That is the boot stance below, not an
 oversight: a host that has just rebooted has this service up before its docker.
 
+**A workload that declares the bind gets the same second half, and it does not ask for it.** A spec
+with `hostDockerSocket` renders `-v /var/run/docker.sock:…` *and* `--group-add <the socket's gid>`,
+where the gid is read off the socket by this process (`dockerhost/DockerSocketGroup`, overridable
+with `QITS_CONTAINERS_DOCKER_SOCKET_GROUP`) — the same `unix:gid` the platform bootstrap reads when
+it decides which group to start this service in. The reason is the paragraph above, one hop out: a
+container holding the bind and running as anybody but root is refused on `connect`, so the mount
+alone is a puzzle rather than a privilege. qits-ci never met it because its opted-in steps run as
+the image's own root; qits-workspaces' admin workspaces do, because a workspace container runs as
+the host uid.
+
+It is **not** a spec field, deliberately: the group is a fact about this host rather than a request,
+so no caller can name one, and it is rendered inside the socket's own arm — a workload that did not
+declare the bind joins no group whatever the host's is. A host with no socket at that path answers
+blank and renders no flag at all, which is the argv this service shipped before the group existed.
+
 ### What else a deployment may set
 
 Everything else has a shipped default and a deployment overrides what it means to:

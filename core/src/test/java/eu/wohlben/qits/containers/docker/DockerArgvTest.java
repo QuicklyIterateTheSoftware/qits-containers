@@ -132,6 +132,59 @@ public class DockerArgvTest {
   }
 
   @Test
+  public void theSocketsGroupIsJoinedBesideTheBindAndNowhereElse() {
+    LifecyclePolicy policy = LifecyclePolicy.ephemeral(null);
+    List<String> joined =
+        DockerArgv.run("docker", "qits-ci-abc-0", ciStep().build(), labels(), policy, "993");
+
+    // Beside the bind, in that order: the bind is what the membership is for, and a --group-add
+    // that could drift away from it would be a membership nothing justifies.
+    int mount = joined.indexOf("/var/run/docker.sock:/var/run/docker.sock");
+    assertEquals("-v", joined.get(mount - 1));
+    assertEquals("--group-add", joined.get(mount + 1));
+    assertEquals("993", joined.get(mount + 2));
+
+    // And it is exactly that pair on top of the ungrouped rendering — nothing else moves.
+    List<String> ungrouped = render(ciStep().build(), policy);
+    List<String> minusTheGroup = new ArrayList<>(joined);
+    minusTheGroup.subList(mount + 1, mount + 3).clear();
+    assertEquals(ungrouped, minusTheGroup, "the group must add two elements and change nothing else");
+  }
+
+  @Test
+  public void aWorkloadWithNoSocketJoinsNoGroupWhateverTheHostsIs() {
+    // The security assertion of this pair: the deployment's group is a fact about the host and is
+    // held for every launch, so a workload that did not declare the bind must never pick it up.
+    List<String> argv =
+        DockerArgv.run(
+            "docker",
+            "qits-ci-abc-0",
+            ciStep().hostDockerSocket(false).build(),
+            labels(),
+            LifecyclePolicy.ephemeral(null),
+            "993");
+    assertFalse(argv.contains("--group-add"), argv.toString());
+    assertFalse(argv.contains("993"), argv.toString());
+  }
+
+  @Test
+  public void aGroupThatCouldReadAsAFlagIsRefused() {
+    // The second belt, on a value that reaches an argv element. Nothing a caller sends can arrive
+    // here — the group is read off the socket — but "no caller can reach it" is exactly the claim
+    // that stops being true one refactor later.
+    assertThrows(
+        IllegalArgumentException.class,
+        () ->
+            DockerArgv.run(
+                "docker",
+                "qits-ci-abc-0",
+                ciStep().build(),
+                labels(),
+                LifecyclePolicy.ephemeral(null),
+                "-rf"));
+  }
+
+  @Test
   public void aSpecThatAskedForNoSocketSeesNoSocketAtAll() {
     // THIS is the security assertion of the pair — the absence, not the presence. The docker socket
     // is root on the host, so "no socket unless the spec declared one" is the invariant, and an
