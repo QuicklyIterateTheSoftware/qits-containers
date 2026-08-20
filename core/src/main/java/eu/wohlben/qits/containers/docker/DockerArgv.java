@@ -77,6 +77,32 @@ public final class DockerArgv {
       ContainerSpec spec,
       Map<String, String> labels,
       LifecyclePolicy policy) {
+    return run(runtimeBinary, name, spec, labels, policy, "");
+  }
+
+  /**
+   * The same run, told which group owns the host's docker socket.
+   *
+   * <p>{@code socketGroup} is rendered as a {@code --group-add} <b>only beside the socket bind</b>,
+   * and it is blank for every workload that did not ask for one. It exists because a bind a workload
+   * cannot open is not a privilege, it is a puzzle: the socket is {@code srw-rw----} owned by the
+   * host's docker group, so a container running as anybody but root can hold the mount and still be
+   * refused by the kernel on {@code connect}. qits-ci never met this — its opted-in steps run as the
+   * image's own root — and qits-workspaces' admin workspaces do, because a workspace container runs
+   * as the host uid.
+   *
+   * <p><b>It is not a spec field, deliberately.</b> The value is the socket's own group, read off the
+   * socket by the process that holds it, so no caller can name a group and nothing can join one
+   * without the bind that makes it mean anything. A spec field would be exactly the assembled
+   * privilege {@link ContainerSpec} exists to prevent.
+   */
+  public static List<String> run(
+      String runtimeBinary,
+      String name,
+      ContainerSpec spec,
+      Map<String, String> labels,
+      LifecyclePolicy policy,
+      String socketGroup) {
     ContainersIdentifiers.requireContainerName(name);
     ContainersIdentifiers.requireImage(spec.image());
     ContainersIdentifiers.requireNetwork(spec.network());
@@ -164,6 +190,13 @@ public final class DockerArgv {
     if (spec.hostDockerSocket()) {
       argv.add("-v");
       argv.add(DOCKER_SOCKET + ":" + DOCKER_SOCKET);
+      // …and the group that makes the bind usable, when the deployment could read one off the
+      // socket. It is rendered here and nowhere else, so a workload that did not ask for the socket
+      // joins no group whatever the deployment holds.
+      if (socketGroup != null && !socketGroup.isBlank()) {
+        argv.add("--group-add");
+        argv.add(ContainersIdentifiers.requireGroup(socketGroup.trim()));
+      }
     }
     for (Map.Entry<String, String> variable : new TreeMap<>(spec.env()).entrySet()) {
       argv.add("-e");

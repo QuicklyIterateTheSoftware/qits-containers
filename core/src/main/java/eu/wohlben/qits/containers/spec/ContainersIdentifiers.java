@@ -144,6 +144,22 @@ public final class ContainersIdentifiers {
     return user;
   }
 
+  /**
+   * A supplementary group the container joins — {@code docker run --group-add}.
+   *
+   * <p>Same shape as {@link #requireUser} and same belt, for the same argv reason. <b>No caller
+   * supplies one</b>: the only group this service ever renders is the docker socket's own, read off
+   * the socket by the deployment, so this belt guards a host fact rather than a request. That is
+   * the whole difference between a privilege that was granted and one that was assembled — see
+   * {@link ContainerSpec#hostDockerSocket()}.
+   */
+  public static String requireGroup(String group) {
+    if (group == null || group.isEmpty() || group.length() > OWNER_MAX || !group.matches(USER_NAME)) {
+      throw refuse("group", group);
+    }
+    return group;
+  }
+
   /** The network a container is started on. One only — docker takes one at run time. */
   public static String requireNetwork(String network) {
     if (network == null || network.length() > NAME_MAX || !network.matches(NETWORK_NAME)) {
