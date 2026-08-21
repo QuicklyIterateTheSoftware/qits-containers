@@ -452,6 +452,31 @@ public class FakeContainersDriver implements ContainersDriver {
     return result;
   }
 
+  /**
+   * Remove a tagged image by its references. The scripted outcome is looked up by the IMAGE'S ID,
+   * so a test scripts a refusal the same way whichever call the collection ends up making.
+   */
+  @Override
+  public OpResult removeImageReferences(List<String> references, Duration timeout) {
+    refuseIfDown("image rm " + String.join(" ", references));
+    calls.add("removeImageReferences:" + String.join(",", references));
+    ImageSummary named =
+        images.stream()
+            .filter(image -> image.tags().stream().anyMatch(references::contains))
+            .findFirst()
+            .orElse(null);
+    if (named == null) {
+      return new OpResult(false, "Error response from daemon: No such image: " + references);
+    }
+    OpResult result = imageRemovals.getOrDefault(named.id(), new OpResult(true, null));
+    if (result.ok()) {
+      // Docker's own arithmetic: the last untag takes the image. This fake is only asked for the
+      // whole set at once, so the image goes when the call works.
+      images.remove(named);
+    }
+    return result;
+  }
+
   @Override
   public List<String> listDanglingVolumes(Duration timeout) {
     refuseIfDown("volume ls");

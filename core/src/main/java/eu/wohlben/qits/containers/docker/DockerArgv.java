@@ -450,11 +450,19 @@ public final class DockerArgv {
   }
 
   /**
-   * Remove one image, <b>by id and never forced</b>.
+   * Remove one <b>untagged</b> image, by id and never forced.
    *
-   * <p>No {@code -f}: a forced remove untags an image other references still name and can take one
-   * a container is holding. The refusal docker answers instead is the last belt under the keep
-   * rules, and it lands on the caller's {@code failed} list where a person can read it.
+   * <p>No {@code -f}, here or in {@link #imageRmRefs}: a forced remove untags an image other
+   * references still name and can take one a container is holding. The refusal docker answers
+   * instead is the last belt under the keep rules, and it lands on the caller's {@code failed} list
+   * where a person can read it.
+   *
+   * <p><b>An id is only the right argument for a DANGLING image</b> — measured on the platform's
+   * first real collection run, where 20 of 32 candidates came back as {@code conflict: unable to
+   * delete <id> (must be forced) - image is referenced in multiple repositories}. Docker refuses to
+   * delete an id that more than one reference names, and two tags of the SAME repository are two
+   * references ({@code projects-daemon:2026.820.154053} beside {@code projects-daemon:863933e…}).
+   * A tagged image is removed by {@link #imageRmRefs} instead.
    *
    * <p>And there is no {@code image prune} anywhere in this file. A prune is docker deciding; the
    * whole point of the sweep above it is that this service decides, image by image, with the rows
@@ -462,6 +470,30 @@ public final class DockerArgv {
    */
   public static List<String> imageRm(String runtimeBinary, String id) {
     return List.of(runtimeBinary, "image", "rm", ContainersIdentifiers.requireImageId(id));
+  }
+
+  /**
+   * Remove a tagged image by <b>every reference that names it</b>, in one call.
+   *
+   * <p>Each argument untags; the last one takes the image itself, which is docker's own arithmetic
+   * and is why this is not a forced delete under another name. It is one call rather than one per
+   * tag so the image cannot be left half-untagged by a failure between two calls — and if docker
+   * refuses partway, the next run sees whatever references are left and asks again.
+   *
+   * <p><b>The references are the tags {@code image ls} just printed, not anything a caller sent</b>,
+   * and they are belt-checked as image references all the same: this is the one removal in the
+   * service that takes a name, so the check that a name cannot open with a {@code -} or carry
+   * whitespace is doing real work.
+   */
+  public static List<String> imageRmRefs(String runtimeBinary, List<String> references) {
+    if (references == null || references.isEmpty()) {
+      throw new IllegalArgumentException("Invalid image references: none");
+    }
+    List<String> argv = new ArrayList<>(List.of(runtimeBinary, "image", "rm"));
+    for (String reference : references) {
+      argv.add(ContainersIdentifiers.requireImage(reference));
+    }
+    return List.copyOf(argv);
   }
 
   /** Volumes no container references — the only volumes a collection may even consider. */
@@ -542,6 +574,32 @@ public final class DockerArgv {
   /** What the host builder's cache holds. A read; it removes nothing. */
   public static List<String> buildxDu(String runtimeBinary) {
     return List.of(runtimeBinary, "buildx", "du");
+  }
+
+  /** Where the buildx plugin is told to keep its own state — see {@link #buildxEnvironment}. */
+  public static final String BUILDX_CONFIG_DIR = "/tmp/qits-buildx";
+
+  /**
+   * The environment the two host build-cache calls are made with.
+   *
+   * <p><b>Measured on the platform's first real collection run:</b> {@code docker builder prune}
+   * answered {@code mkdir /work/config/buildx: permission denied}. The buildx plugin keeps state
+   * under {@code $DOCKER_CONFIG}, and this service is deployed with that pointed at a READ-ONLY
+   * config volume — the one carrying its registry credentials — so the plugin cannot create its
+   * directory and the prune fails before it starts.
+   *
+   * <p>{@code BUILDX_CONFIG} moves that state and nothing else: {@code DOCKER_CONFIG} stays exactly
+   * as the deployment set it, so the credentials are still found. The directory is left for buildx
+   * to create, which it can, because {@value #BUILDX_CONFIG_DIR} is under a writable {@code /tmp}
+   * in every container this service runs in.
+   *
+   * <p>It is a map beside the argvs rather than a variable set on this process, because a
+   * {@code setenv} would apply to every docker call this service ever makes — including the
+   * {@code exec}s into a builder, where it would mean nothing, and any future call where it would
+   * mean something nobody decided.
+   */
+  public static Map<String, String> buildxEnvironment() {
+    return Map.of("BUILDX_CONFIG", BUILDX_CONFIG_DIR);
   }
 
   /**

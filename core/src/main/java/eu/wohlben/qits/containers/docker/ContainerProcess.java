@@ -5,6 +5,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -29,7 +30,7 @@ import java.util.concurrent.TimeUnit;
  * literals and a number. No caller may name either, which is what keeps {@code exec} from becoming
  * a general capability of this service. A second use is a decision, not a refactor.
  *
- * <p><b>There is one entry point and it takes both a timeout and a bound.</b> That is the whole
+ * <p><b>Every entry point takes both a timeout and a bound.</b> That is the whole
  * design, and it is the repository's second invariant (AGENTS.md): a docker call with no deadline is
  * a worker held forever by a daemon that stopped answering, and a capture with no bound is a heap
  * whose size the caller chose. Container output is attacker-influenced — an owner picks the image
@@ -39,6 +40,15 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>Output is <b>bounded while reading</b>: the buffer keeps only the trailing {@code maxChars} (a
  * failure's tail is where the diagnosis is) and reports {@code truncated}.
+ *
+ * <p><b>The second entry point adds an environment and takes both guards anyway</b>, which is what
+ * keeps it from being the convenience overload the paragraph above forbids. It exists for one
+ * measured reason: the CLI's buildx plugin writes its state under {@code $DOCKER_CONFIG}, and this
+ * service is deployed with a READ-ONLY config volume — so a host build-cache prune answered
+ * {@code mkdir /work/config/buildx: permission denied} on the platform's first real collection run.
+ * {@code BUILDX_CONFIG} points that state somewhere writable. The entries are added to this
+ * process's own environment rather than replacing it, because a docker CLI stripped of
+ * {@code DOCKER_CONFIG} would lose the registry credentials the same deployment mounts.
  */
 public final class ContainerProcess {
 
@@ -62,10 +72,23 @@ public final class ContainerProcess {
    * @param maxChars how much of the output tail is kept
    */
   public static Result run(Path cwd, List<String> argv, Duration timeout, int maxChars) {
+    return run(cwd, argv, Map.of(), timeout, maxChars);
+  }
+
+  /**
+   * The same run, with these variables added to the environment the child sees.
+   *
+   * @param env variables to ADD to this process's own environment; never a replacement for it
+   */
+  public static Result run(
+      Path cwd, List<String> argv, Map<String, String> env, Duration timeout, int maxChars) {
     try {
       ProcessBuilder pb = new ProcessBuilder(argv);
       if (cwd != null) {
         pb.directory(cwd.toFile());
+      }
+      if (env != null && !env.isEmpty()) {
+        pb.environment().putAll(env);
       }
       pb.redirectErrorStream(true);
       Process process = pb.start();

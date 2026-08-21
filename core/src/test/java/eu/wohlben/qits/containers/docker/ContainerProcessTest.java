@@ -41,6 +41,24 @@ public class ContainerProcessTest {
   }
 
   @Test
+  public void anEnvironmentIsADDEDToThisProcessOwnAndNeverAReplacementForIt() {
+    // The buildx state directory arrives this way, and PATH has to survive it: a child handed only
+    // the variables this service names would be a docker CLI that cannot find its own credentials
+    // — DOCKER_CONFIG is set by the deployment and is not ours to drop.
+    ContainerProcess.Result result =
+        ContainerProcess.run(
+            null,
+            List.of("bash", "-c", "echo \"cfg=$BUILDX_CONFIG path=${PATH:+set}\""),
+            java.util.Map.of("BUILDX_CONFIG", "/tmp/qits-buildx"),
+            Duration.ofSeconds(30),
+            1024);
+
+    assertEquals(0, result.exitCode());
+    assertTrue(result.output().contains("cfg=/tmp/qits-buildx"), result.output());
+    assertTrue(result.output().contains("path=set"), result.output());
+  }
+
+  @Test
   public void outputIsBoundedWhileReadingAndKeepsTheTail() {
     // A container's output is attacker-influenced and unbounded; the buffer must stay O(maxChars)
     // rather than materializing the whole stream on this service's heap.
