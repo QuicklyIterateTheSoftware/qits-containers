@@ -224,8 +224,15 @@ public final class ContainersWire {
    * <p><b>A real prune with no {@code keepStorageBytes} is refused</b> rather than read as zero: a
    * missing number would mean "keep nothing", which is the one value nobody would leave a field out
    * to ask for. A dry run does not need it, because it prunes nothing.
+   *
+   * <p>{@code builderKeepStorageBytes} is what a {@code buildx_buildkit_*} container's own cache may
+   * keep, and it is <b>optional</b>: absent, it is {@code keepStorageBytes}. It exists because a
+   * bootstrap builder is only useful while a bootstrap runs, so the platform wants it kept far
+   * smaller than the host's own cache — and defaulting to the host's number is what keeps a caller
+   * that does not care about the distinction from having to know about it.
    */
-  public record BuildCacheGcRequest(Boolean dryRun, Long keepStorageBytes) {}
+  public record BuildCacheGcRequest(
+      Boolean dryRun, Long keepStorageBytes, Long builderKeepStorageBytes) {}
 
   /** The host builder's cache. {@code error} is null when it worked. */
   public record BuildCacheHostDto(long reclaimedBytes, String detail, String error) {}

@@ -278,6 +278,61 @@ class GcApiTest {
   }
 
   @Test
+  void aBuilderKeepStorageIsOptionalAndFallsBackToTheHostsNumber() {
+    driver.scriptBuilders(List.of("buildx_buildkit_qits-bootstrap-builder-v40"));
+
+    given()
+        .contentType(ContentType.JSON)
+        .body("{\"dryRun\":false,\"keepStorageBytes\":20000000000}")
+        .when()
+        .post(BUILD_CACHE)
+        .then()
+        .statusCode(200);
+
+    org.junit.jupiter.api.Assertions.assertTrue(
+        driver
+            .calls()
+            .contains("pruneBuilderCache:buildx_buildkit_qits-bootstrap-builder-v40:20000000000"),
+        "a caller that does not know the two caches are separate must not empty one: "
+            + driver.calls());
+  }
+
+  @Test
+  void aBuilderKeepStorageOfItsOwnReachesTheBuilderAndNotTheHost() {
+    driver.scriptBuilders(List.of("buildx_buildkit_qits-bootstrap-builder-v40"));
+
+    given()
+        .contentType(ContentType.JSON)
+        .body(
+            "{\"dryRun\":false,\"keepStorageBytes\":20000000000,"
+                + "\"builderKeepStorageBytes\":1000000000}")
+        .when()
+        .post(BUILD_CACHE)
+        .then()
+        .statusCode(200);
+
+    org.junit.jupiter.api.Assertions.assertEquals(
+        List.of(
+            "pruneBuildCache:20000000000",
+            "listBuildxBuilders",
+            "pruneBuilderCache:buildx_buildkit_qits-bootstrap-builder-v40:1000000000"),
+        driver.calls());
+  }
+
+  @Test
+  void aNegativeBuilderKeepStorageIsRefusedLikeTheHostsOwn() {
+    given()
+        .contentType(ContentType.JSON)
+        .body("{\"dryRun\":false,\"keepStorageBytes\":1,\"builderKeepStorageBytes\":-1}")
+        .when()
+        .post(BUILD_CACHE)
+        .then()
+        .statusCode(400)
+        .body("code", is("INVALID"))
+        .body("message", org.hamcrest.Matchers.containsString("builderKeepStorageBytes"));
+  }
+
+  @Test
   void aRealPruneWithNoKeepStorageIsRefused() {
     // "Keep nothing" is not a value anybody leaves a field out to ask for.
     given()

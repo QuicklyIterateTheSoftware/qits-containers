@@ -97,6 +97,26 @@ class DockerGcReadsTest {
   }
 
   @Test
+  void anAllListingsNoneRowsAreTheDanglingImagesAndTheTaggedOnesAreUntouched() {
+    // What `image ls --all` really looks like on the containerd store: the tagged images, then the
+    // <none> rows a plain listing does not print at all. 55 of these survived two collection runs.
+    List<ImageSummary> images =
+        DockerGcReads.images(
+            """
+            sha256:1111111111111111111111111111111111111111111111111111111111111111|registry:8080/qits/qits-ci|cafe|2026-08-18 04:46:43 +0200 CEST|325MB
+            sha256:2222222222222222222222222222222222222222222222222222222222222222|<none>|<none>|2026-08-18 04:00:52 +0200 CEST|603MB
+            sha256:3333333333333333333333333333333333333333333333333333333333333333|<none>|<none>|2026-08-17 03:51:02 +0200 CEST|391MB
+            """);
+
+    assertEquals(3, images.size());
+    assertEquals(1, images.stream().filter(image -> !image.tags().isEmpty()).count());
+    assertEquals(
+        2,
+        images.stream().filter(image -> image.tags().isEmpty()).count(),
+        "the <none> rows are the dangling images, and they are what --all is for");
+  }
+
+  @Test
   void anImageWithNoneInBothColumnsIsDangling() {
     List<ImageSummary> images =
         DockerGcReads.images(
