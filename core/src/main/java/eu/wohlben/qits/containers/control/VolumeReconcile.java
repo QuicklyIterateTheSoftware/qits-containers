@@ -65,17 +65,7 @@ public class VolumeReconcile {
     if (listed.isEmpty()) {
       return 0;
     }
-    List<Claim> claims =
-        registry.read(
-            "The volume reconcile's row read",
-            () -> {
-              List<Claim> out = new java.util.ArrayList<>();
-              for (String name : listed) {
-                CtVolume row = volumes.find("name", name).firstResult();
-                out.add(new Claim(name, row == null ? null : row.owner, row == null ? null : row.desiredState));
-              }
-              return List.copyOf(out);
-            });
+    List<Claim> claims = claimsFor(listed);
 
     int removed = 0;
     for (Claim claim : claims) {
@@ -118,5 +108,35 @@ public class VolumeReconcile {
         ContainerRegistry.CUTOVER_BUDGET);
   }
 
-  private record Claim(String name, String owner, VolumeState desired) {}
+  /**
+   * What the rows say about these volume names, read in one bracket.
+   *
+   * <p><b>It is the one row lookup a docker volume name has, and it is shared on purpose.</b>
+   * {@link VolumeGc} asks the same question of a different candidate set — dangling volumes rather
+   * than labelled ones — and a second copy of the lookup would be a second answer to "is this
+   * volume claimed", which is the question the whole untouchable rule turns on. The key is the name
+   * alone because that is all a listing carries: {@code ContainerLabels.forVolume} writes no owner
+   * and no row id, deliberately, since a volume outlives both.
+   *
+   * <p>The read is {@link ContainerRegistry#read}'s retried bracket, so a database that blinked
+   * throws rather than answering "nothing is claimed" — which would be every volume on the host
+   * unclaimed at once, and unclaimed is the half of the rule that permits nothing.
+   */
+  List<Claim> claimsFor(List<String> names) {
+    return registry.read(
+        "The volume row read",
+        () -> {
+          List<Claim> out = new java.util.ArrayList<>();
+          for (String name : names) {
+            CtVolume row = volumes.find("name", name).firstResult();
+            out.add(
+                new Claim(
+                    name, row == null ? null : row.owner, row == null ? null : row.desiredState));
+          }
+          return List.copyOf(out);
+        });
+  }
+
+  /** One volume name and the row that claims it, or nulls for one no row names. */
+  record Claim(String name, String owner, VolumeState desired) {}
 }

@@ -54,6 +54,9 @@ public final class ContainersIdentifiers {
    */
   public static final int ALIAS_MAX = 63;
 
+  /** The largest keep-storage a prune may be asked for: one petabyte, in bytes. */
+  public static final long KEEP_STORAGE_MAX = 1_000_000_000_000_000L;
+
   /** Environment keys, POSIX-shaped — the charset a shell would accept for a variable name. */
   private static final String ENV_KEY = "[A-Za-z_][A-Za-z0-9_]*";
 
@@ -79,6 +82,33 @@ public final class ContainersIdentifiers {
 
   /** A docker network name — the volume charset, for the same reasons. */
   private static final String NETWORK_NAME = "[a-zA-Z0-9][a-zA-Z0-9_.-]*";
+
+  /**
+   * What every buildx builder container is named with, and what its state volume is named for.
+   *
+   * <p>It lives here rather than in an argv or a sweep because both of them need it and neither may
+   * own it: {@code DockerArgv} filters a {@code docker ps} on it, {@code control/VolumeGc} reads a
+   * volume name against it, and the two answering differently would be a builder whose cache is
+   * collected while it is running.
+   */
+  public static final String BUILDER_PREFIX = "buildx_buildkit_";
+
+  /**
+   * An image id, as {@code docker image ls --no-trunc} prints one: {@code sha256:} and 64 hex, or a
+   * bare hex prefix of one. <b>It is not {@link #requireImage}</b>, deliberately — a reference may
+   * carry a host, a port and a path, and the garbage collection only ever removes an image by the
+   * id it read off the daemon a moment ago. Narrowing the belt to what the daemon prints is what
+   * makes {@code image rm} unable to take a name at all.
+   */
+  private static final String IMAGE_ID = "(sha256:)?[0-9a-f]{12,64}";
+
+  /**
+   * A buildx builder's container name. The prefix is part of the pattern because it is part of the
+   * claim: the only containers this service ever runs a command <em>inside</em> are the bootstrap
+   * builders, and a belt that accepted any container name would make {@code docker exec} a general
+   * capability rather than that one.
+   */
+  private static final String BUILDER_CONTAINER = BUILDER_PREFIX + "[a-zA-Z0-9][a-zA-Z0-9_.-]*";
 
   /**
    * A label key outside this service's namespace. Dotted segments, the docker convention; no
@@ -264,6 +294,47 @@ public final class ContainersIdentifiers {
       throw refuse("add-host target", entry);
     }
     return entry;
+  }
+
+  /**
+   * An image id read off the daemon — see {@link #IMAGE_ID}.
+   *
+   * <p><b>Nothing removes an image by name here.</b> The collection lists, decides, and then removes
+   * what it decided about by id; a belt that took a reference would let a tag an owner chose reach
+   * an {@code image rm}, and the whole safety of the image sweep is that the keep rules run over
+   * the tags rather than the tags reaching docker.
+   */
+  public static String requireImageId(String id) {
+    if (id == null || !id.matches(IMAGE_ID)) {
+      throw refuse("image id", id);
+    }
+    return id;
+  }
+
+  /**
+   * The container name of a buildx builder — see {@link #BUILDER_CONTAINER}.
+   *
+   * <p>It is the one belt that guards a {@code docker exec}. No caller supplies the value: it comes
+   * from a {@code docker ps} filtered on the same prefix, and this re-checks it, because a listing
+   * is evidence about a host and not about what may be run inside one.
+   */
+  public static String requireBuilderContainer(String name) {
+    if (name == null || name.length() > NAME_MAX || !name.matches(BUILDER_CONTAINER)) {
+      throw refuse("builder container", name);
+    }
+    return name;
+  }
+
+  /**
+   * How much build cache a prune may keep. Non-negative and no larger than a petabyte — the second
+   * half is not tidiness: the number is rendered into an argv, and a value that overflowed on the
+   * far side would be a prune keeping nothing.
+   */
+  public static long requireKeepStorageBytes(long bytes) {
+    if (bytes < 0 || bytes > KEEP_STORAGE_MAX) {
+      throw refuse("keep-storage bytes", String.valueOf(bytes));
+    }
+    return bytes;
   }
 
   private static String requireDnsLabel(String value, int max, String what) {

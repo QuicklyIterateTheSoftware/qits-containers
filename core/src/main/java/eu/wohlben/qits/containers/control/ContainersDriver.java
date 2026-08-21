@@ -111,6 +111,103 @@ public interface ContainersDriver {
    */
   boolean networkPresent(String network, Duration timeout);
 
+  // --- the host's own stores ------------------------------------------------------------------
+  //
+  // Images, dangling volumes and build cache are NOT rows, and this is the one part of the seam
+  // that reaches things no registry row has ever named. Two rules keep it inside the repository's
+  // first invariant, and they are stated here because they are properties of the SEAM rather than
+  // of one caller:
+  //
+  //   1. Nothing here removes by label, by pattern or by prune. `removeImage` and `removeVolume`
+  //      take one name, decided by a caller holding the rows and the pins.
+  //   2. A listing that PROTECTS throws when it could not be made; a listing that only produces
+  //      CANDIDATES degrades to empty. `listImageReferencesInUse` and `listContainersUsingVolume`
+  //      are the protecting ones: an empty answer from either is a positive statement ("nothing
+  //      references this"), so a daemon that did not answer must never be able to say it. An empty
+  //      candidate listing costs a collection run that removes nothing, which is the harmless half.
+
+  /** One store's line of {@code docker system df}: how many, how many are in use, how big. */
+  record UsageLine(long count, long active, long sizeBytes, long reclaimableBytes) {
+
+    /**
+     * A store docker printed no line for. It is an all-zero line rather than a null because the
+     * answer has four members and a caller drawing them needs four — and because a daemon that
+     * answered and named three stores has said something true about the fourth.
+     */
+    public static final UsageLine EMPTY = new UsageLine(0, 0, 0, 0);
+  }
+
+  /** The four stores {@code docker system df} reports on. */
+  record DiskUsage(
+      UsageLine images, UsageLine containers, UsageLine volumes, UsageLine buildCache) {}
+
+  /**
+   * One local image, with every {@code repository:tag} that names it folded onto its id.
+   *
+   * <p><b>An image with no tags is a dangling one</b> — that is the whole of the definition, and it
+   * is why "dangling" is not a field: it is {@code tags().isEmpty()}, so no reader can disagree with
+   * a writer about it.
+   */
+  record ImageSummary(String id, List<String> tags, long sizeBytes, Instant createdAt) {}
+
+  /** A volume's labels and when docker made it. */
+  record VolumeDetail(String name, Map<String, String> labels, Instant createdAt) {}
+
+  /**
+   * What a build-cache call answered: whether it worked, the bytes it names, and its own summary
+   * line. For a prune {@code bytes} is what it reclaimed; for a {@code du} it is what the cache says
+   * is reclaimable. One record for both, because the caller reports them in the same field.
+   */
+  record CacheResult(boolean ok, long bytes, String detail) {}
+
+  /** What the host's four stores hold. Throws when docker did not answer — a usage is not a guess. */
+  DiskUsage diskUsage(Duration timeout);
+
+  /** Every image on the host. Degrades to empty: no candidates is a collection that removes nothing. */
+  List<ImageSummary> listImages(Duration timeout);
+
+  /**
+   * What every container on this host — running or not — was created from: a reference, or a bare
+   * id when the reference no longer resolves.
+   *
+   * <p><b>It throws rather than degrading</b>, and that is the difference between a collection that
+   * is safe and one that is green. This listing is what keeps an image a container is holding out
+   * of the candidate set, so an empty answer has to mean "no container references anything" and
+   * never "we could not find out".
+   */
+  List<String> listImageReferencesInUse(Duration timeout);
+
+  /** Remove one image by id. Never forced, never a prune — see {@code DockerArgv.imageRm}. */
+  OpResult removeImage(String id, Duration timeout);
+
+  /** Volumes no container references. Degrades to empty, like every other candidate listing. */
+  List<String> listDanglingVolumes(Duration timeout);
+
+  /** One volume's labels and creation time. Empty when docker has no such volume; throws otherwise. */
+  Optional<VolumeDetail> inspectVolume(String name, Duration timeout);
+
+  /**
+   * The containers referencing this volume, by name. <b>Throws rather than degrading</b>, for
+   * {@link #listImageReferencesInUse}'s reason: an empty answer is what makes a builder's state
+   * volume removable.
+   */
+  List<String> listContainersUsingVolume(String volumeName, Duration timeout);
+
+  /** The buildx builder containers on this host. Degrades to empty — then no builder is pruned. */
+  List<String> listBuildxBuilders(Duration timeout);
+
+  /** Prune the host builder's cache down to {@code keepStorageBytes}. */
+  CacheResult pruneBuildCache(long keepStorageBytes, Duration timeout);
+
+  /** What the host builder's cache holds. Removes nothing. */
+  CacheResult describeBuildCache(Duration timeout);
+
+  /** Prune one builder container's own cache, from inside it. */
+  CacheResult pruneBuilderCache(String container, long keepStorageBytes, Duration timeout);
+
+  /** What one builder container's cache holds. Removes nothing. */
+  CacheResult describeBuilderCache(String container, Duration timeout);
+
   /**
    * This process's own container id, blank when unknown. The one method with no timeout, because it
    * reads {@code /etc/hostname} rather than asking a daemon anything.

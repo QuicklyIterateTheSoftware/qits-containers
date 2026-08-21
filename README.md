@@ -243,6 +243,43 @@ persisted "for" it.
   running, which is exactly the moment a fresh secret can be handed over. What it needs is one frame
   in the protocol for telling a running container its new secret.
 
+## Garbage collection
+
+Four routes clean up what the platform's builds and containers leave on the host. They are the
+platform's rather than an owner's — an image is named by no owner — so they carry the machine role
+and **no owner guard**, and every policy value arrives in the body from
+qits-platform-orchestrator, which reads the pins once per run and hands them to every deleter.
+
+    GET  /containers/api/gc/usage           docker system df, as four stores of four numbers
+    POST /containers/api/gc/images          {dryRun, minAge, keep[], keepPrefixes[]}
+    POST /containers/api/gc/volumes         {dryRun, minAge}
+    POST /containers/api/gc/build-cache     {dryRun, keepStorageBytes}
+
+**Images are kept by four rules, checked in order, and removed only if none of them speaks:**
+`in-use` (a container was created from it, running or not), `live-row` (a live registry row names
+it), `pinned` (a `keep` entry or a `keepPrefixes` match), `too-young` (built inside `minAge` — which
+is what protects an image a CI step has built and not yet pushed). Everything else goes, dangling
+and tagged alike. Removal is `docker image rm <id>`, one at a time, never forced and never a
+`prune`.
+
+**Volumes: only dangling ones are candidates**, and only three classes of them are removed —
+`managed-no-row` (ours, and no row claims it), `buildx-state` (a dead builder's cache store) and
+`anonymous` (docker's own 64-hex name). Everything else dangling is kept as `unmanaged`, which is
+this repository's first invariant read for volumes: what this service cannot account for is
+somebody else's.
+
+**Build cache** is pruned down to `keepStorageBytes` on the host builder and inside every
+`buildx_buildkit_*` container. A builder that fails costs itself a row of the answer and never the
+call.
+
+**No row is written, updated or deleted by any of it.** Two of the four read rows, and only to
+protect something: the image sweep keeps what a live row names, and the volume sweep keeps what a
+row claims. A collection that could write a row would be able to erase the record of what it
+removed.
+
+Everything is reversible before it happens: `dryRun` reports exactly what a real run would do, and
+a body that forgot the field **is** a dry run.
+
 ## What is deliberately *not* here yet
 
 - **The consumers.** qits-ci, qits-workspaces and qits-projects still run their own containers; the

@@ -154,6 +154,35 @@ class MachineGuardTest {
     machine().when().delete(OWN_PLACE).then().statusCode(200).body("existed", is(true));
   }
 
+  @Test
+  void theGarbageCollectionIsGuardedByTheRoleAndDeliberatelyNotByAnOwner() {
+    // These four routes are the platform's rather than an owner's: an image is named by no owner,
+    // so there is no path owner to compare a subject against and no honest way to invent one. What
+    // guards them is the machine role — and the absence of OwnerGuard is asserted here, because a
+    // route that quietly gained one would refuse the orchestrator, whose subject is nobody's owner.
+    given().when().get("/containers/api/gc/usage").then().statusCode(401);
+
+    given()
+        .header("Authorization", "Bearer " + MachineTokens.rolelessToken(OWNER, OWN_AUDIENCE))
+        .when()
+        .get("/containers/api/gc/usage")
+        .then()
+        .statusCode(403);
+
+    machine().when().get("/containers/api/gc/usage").then().statusCode(200);
+
+    given()
+        .header(
+            "Authorization",
+            "Bearer " + MachineTokens.token("dev-qits-platform-orchestrator", OWN_AUDIENCE))
+        .contentType(ContentType.JSON)
+        .body("{\"dryRun\":true}")
+        .when()
+        .post("/containers/api/gc/images")
+        .then()
+        .statusCode(200);
+  }
+
   /** A caller holding a fresh token of its own, addressed to this service. */
   private static RequestSpecification machine() {
     return given()

@@ -154,6 +154,90 @@ public final class ContainersWire {
   /** The registry has no such image, so the run had nothing to start. 409. */
   public static final String IMAGE_MISSING = "IMAGE_MISSING";
 
+  // --- garbage collection -------------------------------------------------------------------
+  //
+  // The one family on this surface that is NOT about a place. Everything above is addressed to
+  // {owner}/{workload}/{ref} and guarded by the owner in the path being the caller; these four are
+  // about the HOST — its images, its dangling volumes, its build cache — which belong to no owner
+  // and are therefore guarded by the machine role alone. The shapes are pinned by
+  // qits-orchestrator-plan.md and restated by qits-platform-orchestrator, which builds against
+  // them without seeing this file: a field renamed here is a step of the gc process that silently
+  // reads null.
+
+  /** One store's line of {@code docker system df}. */
+  public record UsageDto(long count, long active, long sizeBytes, long reclaimableBytes) {}
+
+  /** What the host's four stores hold. */
+  public record UsageResponse(
+      UsageDto images, UsageDto containers, UsageDto volumes, UsageDto buildCache) {}
+
+  /**
+   * What an image collection may keep.
+   *
+   * <p><b>{@code dryRun} absent means a dry run</b>, which is this record's one decision that is not
+   * simply JSON's reading of its own absence. A body that forgot the field would otherwise remove
+   * images, and the caller that always sends it — the orchestrator — is unaffected either way. The
+   * same stance {@code createdBefore} takes on the boot reap: the destructive reading is never the
+   * one a missing value gets.
+   *
+   * <p>{@code minAge} is an ISO 8601 duration ({@code PT6H}). It is the caller's policy and not this
+   * service's: an absent one protects nothing by age, because inventing a grace here would put the
+   * policy in two places.
+   */
+  public record ImageGcRequest(
+      Boolean dryRun, String minAge, List<String> keep, List<String> keepPrefixes) {}
+
+  /** One image and what was decided about it. */
+  public record ImageOutcomeDto(String id, List<String> tags, long sizeBytes, String reason) {}
+
+  /** One image docker refused to remove. */
+  public record ImageFailureDto(String id, List<String> tags, String error) {}
+
+  /** The whole image collection. In a dry run {@code removed} is what a real run would remove. */
+  public record ImageGcResponse(
+      boolean dryRun,
+      int examined,
+      long bytesReclaimed,
+      List<ImageOutcomeDto> removed,
+      List<ImageOutcomeDto> kept,
+      List<ImageFailureDto> failed) {}
+
+  /** What a volume collection may keep. Same {@code dryRun} stance as the image one. */
+  public record VolumeGcRequest(Boolean dryRun, String minAge) {}
+
+  /** One volume and what was decided about it. */
+  public record VolumeOutcomeDto(String name, String reason) {}
+
+  /** One volume docker refused, or could not be asked about. */
+  public record VolumeFailureDto(String name, String error) {}
+
+  /** The whole volume collection. */
+  public record VolumeGcResponse(
+      boolean dryRun,
+      List<VolumeOutcomeDto> removed,
+      List<VolumeOutcomeDto> kept,
+      List<VolumeFailureDto> failed) {}
+
+  /**
+   * How much build cache each cache may keep.
+   *
+   * <p><b>A real prune with no {@code keepStorageBytes} is refused</b> rather than read as zero: a
+   * missing number would mean "keep nothing", which is the one value nobody would leave a field out
+   * to ask for. A dry run does not need it, because it prunes nothing.
+   */
+  public record BuildCacheGcRequest(Boolean dryRun, Long keepStorageBytes) {}
+
+  /** The host builder's cache. {@code error} is null when it worked. */
+  public record BuildCacheHostDto(long reclaimedBytes, String detail, String error) {}
+
+  /** One builder container's cache. Its {@code error} is its own and never the call's. */
+  public record BuildCacheBuilderDto(
+      String container, long reclaimedBytes, String detail, String error) {}
+
+  /** The whole build-cache collection. */
+  public record BuildCacheGcResponse(
+      boolean dryRun, BuildCacheHostDto host, List<BuildCacheBuilderDto> builders) {}
+
   // --- the wire to the domain, and the belts fire here -------------------------------------------
 
   /** The spec a caller sent, as the domain record. Every belt in the compact constructor runs. */

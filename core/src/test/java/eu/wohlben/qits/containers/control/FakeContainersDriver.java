@@ -1,5 +1,8 @@
 package eu.wohlben.qits.containers.control;
 
+import eu.wohlben.qits.containers.control.ContainersDriver.CacheResult;
+import eu.wohlben.qits.containers.control.ContainersDriver.ImageSummary;
+import eu.wohlben.qits.containers.control.ContainersDriver.VolumeDetail;
 import eu.wohlben.qits.containers.spec.ContainerSpec;
 import eu.wohlben.qits.containers.spec.LifecyclePolicy;
 import eu.wohlben.qits.containers.spec.VolumeSpec;
@@ -86,6 +89,23 @@ public class FakeContainersDriver implements ContainersDriver {
     selfId = "";
     down = null;
     duringRun = null;
+    diskUsage =
+        new ContainersDriver.DiskUsage(
+            ContainersDriver.UsageLine.EMPTY,
+            ContainersDriver.UsageLine.EMPTY,
+            ContainersDriver.UsageLine.EMPTY,
+            ContainersDriver.UsageLine.EMPTY);
+    images.clear();
+    imageReferencesInUse.clear();
+    imageRemovals.clear();
+    danglingVolumes.clear();
+    volumeDetails.clear();
+    volumeHolders.clear();
+    volumeHoldersUnreadable.clear();
+    builders.clear();
+    builderCaches.clear();
+    inUseUnreadable = null;
+    hostCache = new CacheResult(true, 0, "Total: 0B");
   }
 
   /** Every driver call in arrival order, tagged {@code kind:target}. */
@@ -308,6 +328,188 @@ public class FakeContainersDriver implements ContainersDriver {
   public String selfContainerId() {
     calls.add("selfContainerId");
     return selfId;
+  }
+
+
+  // --- the host's own stores -------------------------------------------------------------------
+  //
+  // Nothing scripted here is a container this fake keeps state for: images, dangling volumes and
+  // build caches are the host's, and what a test says about them is what docker would have said.
+  // The two listings that PROTECT — the in-use references and a volume's holders — have their own
+  // "docker would not answer" hooks, because the whole safety of the two collections is that an
+  // unanswerable daemon stops them rather than emptying them.
+
+  private volatile ContainersDriver.DiskUsage diskUsage =
+      new ContainersDriver.DiskUsage(
+          ContainersDriver.UsageLine.EMPTY,
+          ContainersDriver.UsageLine.EMPTY,
+          ContainersDriver.UsageLine.EMPTY,
+          ContainersDriver.UsageLine.EMPTY);
+
+  private final List<ImageSummary> images = Collections.synchronizedList(new ArrayList<>());
+  private final List<String> imageReferencesInUse = Collections.synchronizedList(new ArrayList<>());
+  private final Map<String, OpResult> imageRemovals = new ConcurrentHashMap<>();
+  private final List<String> danglingVolumes = Collections.synchronizedList(new ArrayList<>());
+  private final Map<String, VolumeDetail> volumeDetails = new ConcurrentHashMap<>();
+  private final Map<String, List<String>> volumeHolders = new ConcurrentHashMap<>();
+  private final Map<String, String> volumeHoldersUnreadable = new ConcurrentHashMap<>();
+  private final List<String> builders = Collections.synchronizedList(new ArrayList<>());
+  private final Map<String, CacheResult> builderCaches = new ConcurrentHashMap<>();
+
+  private volatile String inUseUnreadable;
+  private volatile CacheResult hostCache = new CacheResult(true, 0, "Total: 0B");
+
+  public void scriptDiskUsage(ContainersDriver.DiskUsage usage) {
+    diskUsage = usage;
+  }
+
+  /** One image on the host. No tags is a dangling image, which is the whole of that definition. */
+  public void scriptImage(String id, List<String> tags, long sizeBytes, Instant createdAt) {
+    images.add(new ImageSummary(id, List.copyOf(tags), sizeBytes, createdAt));
+  }
+
+  /** What containers were created from — a reference, or a bare id docker could not resolve. */
+  public void scriptImageReferencesInUse(List<String> references) {
+    imageReferencesInUse.clear();
+    imageReferencesInUse.addAll(references);
+  }
+
+  /** The listing that protects, refusing to answer. Nothing may be collected on the strength of it. */
+  public void scriptInUseUnreadable(String message) {
+    inUseUnreadable = message;
+  }
+
+  /** What docker says to one {@code image rm}. Unscripted removes work. */
+  public void scriptImageRemoval(String id, OpResult result) {
+    imageRemovals.put(id, result);
+  }
+
+  public void scriptDanglingVolumes(List<String> names) {
+    danglingVolumes.clear();
+    danglingVolumes.addAll(names);
+  }
+
+  /** A volume docker knows about. One nothing scripted is one docker does not have. */
+  public void scriptVolumeDetail(String name, Map<String, String> labels, Instant createdAt) {
+    volumeDetails.put(name, new VolumeDetail(name, Map.copyOf(labels), createdAt));
+  }
+
+  public void scriptVolumeHolders(String name, List<String> containers) {
+    volumeHolders.put(name, List.copyOf(containers));
+  }
+
+  /** The other listing that protects, refusing to answer for one volume. */
+  public void scriptVolumeHoldersUnreadable(String name, String message) {
+    volumeHoldersUnreadable.put(name, message);
+  }
+
+  public void scriptBuilders(List<String> containers) {
+    builders.clear();
+    builders.addAll(containers);
+  }
+
+  public void scriptHostCache(CacheResult result) {
+    hostCache = result;
+  }
+
+  public void scriptBuilderCache(String container, CacheResult result) {
+    builderCaches.put(container, result);
+  }
+
+  @Override
+  public ContainersDriver.DiskUsage diskUsage(Duration timeout) {
+    refuseIfDown("system df");
+    calls.add("diskUsage");
+    return diskUsage;
+  }
+
+  @Override
+  public List<ImageSummary> listImages(Duration timeout) {
+    refuseIfDown("image ls");
+    calls.add("listImages");
+    return List.copyOf(images);
+  }
+
+  @Override
+  public List<String> listImageReferencesInUse(Duration timeout) {
+    refuseIfDown("ps");
+    calls.add("listImageReferencesInUse");
+    String message = inUseUnreadable;
+    if (message != null) {
+      throw new IllegalStateException("docker did not answer a container listing: " + message);
+    }
+    return List.copyOf(imageReferencesInUse);
+  }
+
+  @Override
+  public OpResult removeImage(String id, Duration timeout) {
+    refuseIfDown("image rm " + id);
+    calls.add("removeImage:" + id);
+    OpResult result = imageRemovals.getOrDefault(id, new OpResult(true, null));
+    if (result.ok()) {
+      images.removeIf(image -> image.id().equals(id));
+    }
+    return result;
+  }
+
+  @Override
+  public List<String> listDanglingVolumes(Duration timeout) {
+    refuseIfDown("volume ls");
+    calls.add("listDanglingVolumes");
+    return List.copyOf(danglingVolumes);
+  }
+
+  @Override
+  public Optional<VolumeDetail> inspectVolume(String name, Duration timeout) {
+    refuseIfDown("volume inspect " + name);
+    calls.add("inspectVolume:" + name);
+    return Optional.ofNullable(volumeDetails.get(name));
+  }
+
+  @Override
+  public List<String> listContainersUsingVolume(String volumeName, Duration timeout) {
+    refuseIfDown("ps --filter volume=" + volumeName);
+    calls.add("listContainersUsingVolume:" + volumeName);
+    String message = volumeHoldersUnreadable.get(volumeName);
+    if (message != null) {
+      throw new IllegalStateException("docker did not answer a container listing: " + message);
+    }
+    return volumeHolders.getOrDefault(volumeName, List.of());
+  }
+
+  @Override
+  public List<String> listBuildxBuilders(Duration timeout) {
+    refuseIfDown("ps --filter name=buildx_buildkit_");
+    calls.add("listBuildxBuilders");
+    return List.copyOf(builders);
+  }
+
+  @Override
+  public CacheResult pruneBuildCache(long keepStorageBytes, Duration timeout) {
+    refuseIfDown("builder prune");
+    calls.add("pruneBuildCache:" + keepStorageBytes);
+    return hostCache;
+  }
+
+  @Override
+  public CacheResult describeBuildCache(Duration timeout) {
+    refuseIfDown("buildx du");
+    calls.add("describeBuildCache");
+    return hostCache;
+  }
+
+  @Override
+  public CacheResult pruneBuilderCache(String container, long keepStorageBytes, Duration timeout) {
+    refuseIfDown("buildctl prune in " + container);
+    calls.add("pruneBuilderCache:" + container + ":" + keepStorageBytes);
+    return builderCaches.getOrDefault(container, new CacheResult(true, 0, "Total: 0B"));
+  }
+
+  @Override
+  public CacheResult describeBuilderCache(String container, Duration timeout) {
+    refuseIfDown("buildctl du in " + container);
+    calls.add("describeBuilderCache:" + container);
+    return builderCaches.getOrDefault(container, new CacheResult(true, 0, "Total: 0B"));
   }
 
   /** Filters as one comparable string, sorted, so scripting and lookup cannot disagree on order. */
