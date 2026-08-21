@@ -381,6 +381,216 @@ public final class DockerArgv {
         runtimeBinary, "network", "inspect", ContainersIdentifiers.requireNetwork(network));
   }
 
+  // --- garbage collection -------------------------------------------------------------------
+  //
+  // The host's own stores, which are NOT rows. Everything above this line is addressed to a
+  // container a registry row names; the argvs below read and remove images, dangling volumes and
+  // build cache, none of which any row has ever named. What keeps them inside this repository's
+  // first invariant is that the DECIDING is the caller's and is made of keep rules — see control's
+  // ImageGc and VolumeGc — and that nothing here is a `prune -a`, a `rm -f` or a label sweep.
+
+  /**
+   * One line per store of {@code docker system df}:
+   * {@code <type>|<count>|<active>|<size>|<reclaimable>}.
+   *
+   * <p><b>Not {@code {{json .}}}</b>, for the reason every other read here is a template: this
+   * module binds no docker output to a record, so a JSON shape would be a second serialization
+   * contract to register for reflection and to keep in step with a CLI nobody here versions.
+   * Measured on docker 29.7.2 — the four types are {@code Images}, {@code Containers},
+   * {@code Local Volumes} and {@code Build Cache}, and the sizes are human ({@code 308.3GB}), which
+   * is what the reader parses.
+   */
+  public static final String DISK_USAGE_FORMAT =
+      "{{.Type}}|{{.TotalCount}}|{{.Active}}|{{.Size}}|{{.Reclaimable}}";
+
+  /** What the host's four stores hold — the before and after of a collection run. */
+  public static List<String> systemDf(String runtimeBinary) {
+    return List.of(runtimeBinary, "system", "df", "--format", DISK_USAGE_FORMAT);
+  }
+
+  /**
+   * One line per {@code repository:tag}: {@code <id>|<repository>|<tag>|<createdAt>|<size>}.
+   *
+   * <p>An image with two tags prints twice under one id, and an untagged one prints once with
+   * {@code <none>} in both fields — which is what "dangling" is. The reader folds the lines back
+   * onto the id.
+   *
+   * <p><b>{@code .Digest} is deliberately not asked for.</b> On the containerd image store it
+   * prints the manifest digest, which is the same value as {@code .ID} — measured on docker 29.7.2
+   * — so a column for it would carry no information and would read like a repo digest, which it is
+   * not.
+   */
+  public static final String IMAGE_FORMAT =
+      "{{.ID}}|{{.Repository}}|{{.Tag}}|{{.CreatedAt}}|{{.Size}}";
+
+  /**
+   * Every image the host holds, tags folded per id by the reader.
+   *
+   * <p>No {@code --all}: intermediate layers are not images anybody may remove, and they are not
+   * what a collection is about. Dangling top-level images are in this listing already.
+   */
+  public static List<String> imageLs(String runtimeBinary) {
+    return List.of(runtimeBinary, "image", "ls", "--no-trunc", "--format", IMAGE_FORMAT);
+  }
+
+  /**
+   * What every container on the host — running or not — was created from.
+   *
+   * <p><b>It is {@code .Image} and not {@code .ImageID}, and that is measured rather than
+   * preferred.</b> Docker 29.7.2 answers {@code can't evaluate field ImageID in type
+   * *formatter.ContainerContext} — the ps formatter has no such field, whatever the docs of a
+   * neighbouring command suggest. {@code .Image} prints what the container was created from: a
+   * reference ({@code registry:8080/qits/qits-ci:<sha>}), or a bare {@code sha256:} id when the
+   * reference no longer resolves. The reader matches BOTH shapes against an image, and a line it
+   * cannot read protects nothing — which is why the caller refuses to collect at all when this
+   * listing did not answer whole.
+   */
+  public static List<String> psImageReferences(String runtimeBinary) {
+    return List.of(runtimeBinary, "ps", "-a", "--no-trunc", "--format", "{{.Image}}");
+  }
+
+  /**
+   * Remove one image, <b>by id and never forced</b>.
+   *
+   * <p>No {@code -f}: a forced remove untags an image other references still name and can take one
+   * a container is holding. The refusal docker answers instead is the last belt under the keep
+   * rules, and it lands on the caller's {@code failed} list where a person can read it.
+   *
+   * <p>And there is no {@code image prune} anywhere in this file. A prune is docker deciding; the
+   * whole point of the sweep above it is that this service decides, image by image, with the rows
+   * and the pins in front of it.
+   */
+  public static List<String> imageRm(String runtimeBinary, String id) {
+    return List.of(runtimeBinary, "image", "rm", ContainersIdentifiers.requireImageId(id));
+  }
+
+  /** Volumes no container references — the only volumes a collection may even consider. */
+  public static List<String> volumeLsDangling(String runtimeBinary) {
+    return List.of(runtimeBinary, "volume", "ls", "-q", "--filter", "dangling=true");
+  }
+
+  /**
+   * When docker made the volume, then its labels one {@code k=v} per line.
+   *
+   * <p>Two facts in one call, separated by a newline the template emits, because a collection asks
+   * both of every candidate. {@code CreatedAt} is RFC 3339 with an offset
+   * ({@code 2026-08-11T17:03:01+02:00}) — measured — and the labels are ranged rather than indexed
+   * for the reason {@link #VOLUME_LABELS_FORMAT} gives.
+   */
+  public static final String VOLUME_DETAIL_FORMAT =
+      "{{.CreatedAt}}{{\"\\n\"}}{{range $k, $v := .Labels}}{{$k}}={{$v}}{{\"\\n\"}}{{end}}";
+
+  /** One volume's creation time and labels — see {@link #VOLUME_DETAIL_FORMAT}. */
+  public static List<String> volumeInspectDetail(String runtimeBinary, String name) {
+    return List.of(
+        runtimeBinary,
+        "volume",
+        "inspect",
+        "--format",
+        VOLUME_DETAIL_FORMAT,
+        ContainersIdentifiers.requireVolumeName(name));
+  }
+
+  /**
+   * The containers that reference this volume, by name. Dangling already says there are none; this
+   * is asked of a builder's state volume anyway, because the two questions have different answers
+   * often enough to matter — a builder container that exists and is stopped holds its state volume
+   * without keeping it out of a dangling listing.
+   */
+  public static List<String> psByVolume(String runtimeBinary, String volumeName) {
+    return List.of(
+        runtimeBinary,
+        "ps",
+        "-a",
+        "--filter",
+        "volume=" + ContainersIdentifiers.requireVolumeName(volumeName),
+        "--format",
+        "{{.Names}}");
+  }
+
+  /** The builder containers on this host. Docker's name filter is a substring match. */
+  public static List<String> psBuildxBuilders(String runtimeBinary) {
+    return List.of(
+        runtimeBinary,
+        "ps",
+        "-a",
+        "--filter",
+        "name=" + ContainersIdentifiers.BUILDER_PREFIX,
+        "--format",
+        "{{.Names}}");
+  }
+
+  /**
+   * Prune the host builder's cache down to {@code keepStorageBytes}.
+   *
+   * <p><b>{@code --keep-storage} takes BYTES here and megabytes in {@link #buildctlPrune}</b>, which
+   * is the one trap in this family. Docker 29.7.2 renamed the flag to {@code --reserved-space} and
+   * keeps {@code --keep-storage} as a deprecated alias that still takes bytes — it prints
+   * {@code Flag --keep-storage has been deprecated} and works. The alias is what is spelled here,
+   * because it is the flag every docker the platform runs understands.
+   */
+  public static List<String> builderPrune(String runtimeBinary, long keepStorageBytes) {
+    return List.of(
+        runtimeBinary,
+        "builder",
+        "prune",
+        "--force",
+        "--keep-storage",
+        String.valueOf(ContainersIdentifiers.requireKeepStorageBytes(keepStorageBytes)));
+  }
+
+  /** What the host builder's cache holds. A read; it removes nothing. */
+  public static List<String> buildxDu(String runtimeBinary) {
+    return List.of(runtimeBinary, "buildx", "du");
+  }
+
+  /**
+   * Prune one builder container's own cache, from inside it.
+   *
+   * <p><b>This is the only {@code docker exec} in the service, and both its words are constants.</b>
+   * The container is a name a {@code ps} filtered on {@link ContainersIdentifiers#BUILDER_PREFIX} answered, re-
+   * checked here by {@link ContainersIdentifiers#requireBuilderContainer}; the command is
+   * {@code buildctl prune} and a number. Nothing an owner sends reaches it, and no caller can name
+   * the container or the command — which is what keeps {@code exec} from becoming a general
+   * capability of this service.
+   *
+   * <p><b>buildctl's {@code --keep-storage} is in MEGABYTES</b>, measured against the buildctl
+   * inside a live builder: {@code --keep-storage float  Keep data below this limit (in MB)}. Handing
+   * it the byte count the wire carries would ask a builder to keep a million times what was meant,
+   * which prunes nothing and reads like a working call. The conversion rounds UP, so a rounding
+   * error keeps cache rather than deleting it.
+   */
+  public static List<String> buildctlPrune(
+      String runtimeBinary, String container, long keepStorageBytes) {
+    return List.of(
+        runtimeBinary,
+        "exec",
+        ContainersIdentifiers.requireBuilderContainer(container),
+        "buildctl",
+        "prune",
+        "--keep-storage",
+        String.valueOf(keepStorageMegabytes(keepStorageBytes)));
+  }
+
+  /** What one builder container's cache holds. A read; it removes nothing. */
+  public static List<String> buildctlDu(String runtimeBinary, String container) {
+    return List.of(
+        runtimeBinary,
+        "exec",
+        ContainersIdentifiers.requireBuilderContainer(container),
+        "buildctl",
+        "du");
+  }
+
+  /** Bytes as the whole megabytes buildctl asks for, rounded up — see {@link #buildctlPrune}. */
+  static long keepStorageMegabytes(long keepStorageBytes) {
+    long bytes = ContainersIdentifiers.requireKeepStorageBytes(keepStorageBytes);
+    return (bytes + MEGABYTE - 1) / MEGABYTE;
+  }
+
+  /** buildctl's megabyte, which is the decimal one its own help text means. */
+  private static final long MEGABYTE = 1_000_000L;
+
   /**
    * This service's labels and the owner's, in one sorted map. The owner's keys are re-checked here
    * rather than trusted from the spec — the second checkpoint, on the value that would forge a

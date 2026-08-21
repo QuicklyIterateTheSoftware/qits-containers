@@ -51,6 +51,22 @@ existed — and unclaimed means left alone. The row is written **before** `docke
 never leave a container the registry has no name for. Anything that would sweep the host by label
 rather than by row is the regression this repo was built to remove.
 
+**1a. An image is not a row, and the keep rules are what stands in for one.** The garbage
+collection (`control/ImageGc`, `control/VolumeGc`, `control/BuildCacheGc`) is the one part of this
+service that removes things no registry row ever named — nothing else could, because the platform's
+builds put the images there and any module's containers run from them. So "unclaimed means somebody
+else's" has nothing to read, and what replaces it is a list of reasons to **keep**, checked in
+order, with removal as the fall-through: in use by a container, named by a live row, pinned by the
+caller, younger than the caller's grace. Two consequences are not negotiable. **A listing that
+protects throws rather than degrading** — `listImageReferencesInUse` and `listContainersUsingVolume`
+answer empty only when docker really said so, because an empty answer from either is what makes
+something removable; every other listing may degrade to empty, which costs a run that removes
+nothing. And **the candidate set is always the daemon's own listing**: never `image prune -a`, never
+`rm -f`, never a pattern or a label sweep, because a prune is docker deciding and the whole point is
+that this service decides, one thing at a time, with the rows and the pins in front of it. A
+dangling volume is under the same rule with three named classes; everything else dangling is kept
+`unmanaged`.
+
 **2. Every docker call carries a timeout and an output bound.** Both are security properties, not
 tuning: a `docker logs` with no bound is a heap the caller chose the size of, and a call with no
 timeout is a worker held forever by a daemon that stopped answering. There is no call shape that is
@@ -77,7 +93,11 @@ exempt, including the ones that "cannot" block.
 - **`core/docker` is argv and process, never a docker call.** `DockerArgv` is pure functions and
   `ContainerProcess` is the shell-out; the driver that puts them together is an interface here
   (`control/ContainersDriver`) and an implementation in `service/`. That is what lets the argvs — the
-  sandbox itself — be asserted element for element with no daemon anywhere.
+  sandbox itself — be asserted element for element with no daemon anywhere. `docker exec` is in that
+  vocabulary for **one** command — `buildctl prune`/`du` inside a `buildx_buildkit_*` container —
+  and both of its words are constants; `ContainerProcess`'s javadoc says what a second use would
+  cost. The reading of what those calls print is `service/dockerhost/DockerGcReads`, pure functions
+  beside the driver for the same reason the argvs sit beside it.
 - **The fakes are duplicated per module, not shared.** Maven has no `testFixtures`, and a test-jar
   dependency between modules that otherwise have none is the higher price. `core`'s
   `FakeContainersDriver` is the original; a module that needs one copies it. Same stance as
@@ -98,6 +118,12 @@ exempt, including the ones that "cannot" block.
   what keeps a credential-free `./mvnw verify` green is qits-auth-core's `%test` dev user, which
   holds every platform role. The sibling control sockets carry the same annotation, so the tunnel is
   not a departure.
+
+  **The four `gc/` routes carry the outer half and deliberately not the inner one.** They are
+  addressed to the HOST — its images, its dangling volumes, its build cache — which belong to no
+  owner, so there is no path owner to compare a subject against and no honest way to invent one.
+  `MachineGuardTest` pins that absence as well as the role, because a route that quietly gained an
+  `OwnerGuard` would refuse qits-platform-orchestrator, whose subject is nobody's owner.
 
   **The inner half is `api/OwnerGuard`**: the owner in the path compared against the machine token's
   **subject, whole** — `dev-qits-ci` and `prod-qits-ci` are two owners, and that prefix is what keeps

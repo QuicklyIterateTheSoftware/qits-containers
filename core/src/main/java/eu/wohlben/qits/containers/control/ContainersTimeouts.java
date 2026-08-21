@@ -51,6 +51,42 @@ public final class ContainersTimeouts {
   public static final Duration VOLUME = Duration.ofSeconds(20);
 
   /**
+   * A {@code docker system df}. It walks every store the daemon has, and a host with three hundred
+   * gigabytes of images takes seconds over it rather than milliseconds.
+   */
+  public static final Duration DISK_USAGE = Duration.ofSeconds(60);
+
+  /** An image or container listing for the collection. Longer than a volume listing, for the same reason. */
+  public static final Duration GC_LIST = Duration.ofSeconds(60);
+
+  /**
+   * One {@code docker image rm}. Minutes rather than seconds: removing a large image unlinks every
+   * layer nothing else holds, and the daemon answers when that is done.
+   */
+  public static final Duration IMAGE_REMOVE = Duration.ofMinutes(2);
+
+  /**
+   * A build-cache prune. <b>The one deadline measured in tens of minutes</b>, and it is not
+   * generosity: a prune of a hundred gigabytes of cache is a lot of unlinking, and a deadline that
+   * cut it short would leave the daemon working while this service reported a failure it invented.
+   */
+  public static final Duration PRUNE = Duration.ofMinutes(30);
+
+  /**
+   * How much of an image listing is kept. Large, because it is one line per {@code repository:tag}
+   * and a build host carries hundreds — and because a listing bounded away is refused rather than
+   * read short: the tail bound drops the FRONT, which for a listing is silent data loss.
+   */
+  public static final int LISTING_MAX_CHARS = 512_000;
+
+  /**
+   * How much of a prune's or a {@code du}'s output is kept. They print a line per cache record
+   * before their summary, and the summary is the last thing on the stream — which the tail bound
+   * keeps.
+   */
+  public static final int PRUNE_MAX_CHARS = 64_000;
+
+  /**
    * How much of a container's output a caller may receive. A {@code docker logs} with no bound is a
    * heap the container chose the size of.
    */

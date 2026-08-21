@@ -1,6 +1,10 @@
 package eu.wohlben.qits.containers.dockerhost;
 
 import eu.wohlben.qits.containers.control.ContainersDriver;
+import eu.wohlben.qits.containers.control.ContainersDriver.CacheResult;
+import eu.wohlben.qits.containers.control.ContainersDriver.DiskUsage;
+import eu.wohlben.qits.containers.control.ContainersDriver.ImageSummary;
+import eu.wohlben.qits.containers.control.ContainersDriver.VolumeDetail;
 import eu.wohlben.qits.containers.control.ContainersTimeouts;
 import eu.wohlben.qits.containers.docker.ContainerProcess;
 import eu.wohlben.qits.containers.docker.DockerArgv;
@@ -291,6 +295,183 @@ public class DockerContainersDriver implements ContainersDriver {
     } catch (Exception e) {
       return "";
     }
+  }
+
+  // --- the host's own stores ---------------------------------------------------------------
+  //
+  // Images, dangling volumes and build cache. The seam's javadoc states the rule these implement:
+  // a listing that PROTECTS throws when it could not be made, a listing that only produces
+  // CANDIDATES degrades to empty. Truncation counts as "could not be made" for every one of them —
+  // the output bound keeps the TAIL, so a listing read short has silently lost its front, and a
+  // listing missing entries is exactly how an in-use image stops being protected.
+
+  @Override
+  public DiskUsage diskUsage(Duration timeout) {
+    ContainerProcess.Result result =
+        ContainerProcess.run(
+            null, DockerArgv.systemDf(runtime), timeout, ContainersTimeouts.SHORT_MAX_CHARS);
+    if (!whole(result)) {
+      LOG.warnf("Could not read the host's disk usage: %s", brief(result.output()));
+      throw new IllegalStateException(
+          "docker did not answer a system df: " + brief(result.output()));
+    }
+    return DockerGcReads.diskUsage(result.output());
+  }
+
+  @Override
+  public List<ImageSummary> listImages(Duration timeout) {
+    ContainerProcess.Result result =
+        ContainerProcess.run(
+            null, DockerArgv.imageLs(runtime), timeout, ContainersTimeouts.LISTING_MAX_CHARS);
+    if (!whole(result)) {
+      LOG.warnf(
+          "Could not read the image listing, so it is read as empty: %s", brief(result.output()));
+      return List.of();
+    }
+    return DockerGcReads.images(result.output());
+  }
+
+  /**
+   * What every container was created from. <b>It throws</b> — see the seam's javadoc: this listing
+   * is what keeps an image a container holds out of a collection's candidate set, so an empty
+   * answer has to mean "no container references anything".
+   */
+  @Override
+  public List<String> listImageReferencesInUse(Duration timeout) {
+    ContainerProcess.Result result =
+        ContainerProcess.run(
+            null,
+            DockerArgv.psImageReferences(runtime),
+            timeout,
+            ContainersTimeouts.LISTING_MAX_CHARS);
+    if (!whole(result)) {
+      LOG.warnf("Could not read what containers are using: %s", brief(result.output()));
+      throw new IllegalStateException(
+          "docker did not answer a container listing: " + brief(result.output()));
+    }
+    return DockerGcReads.linesOf(result.output());
+  }
+
+  @Override
+  public OpResult removeImage(String id, Duration timeout) {
+    return op("remove the image " + id, DockerArgv.imageRm(runtime, id), timeout);
+  }
+
+  @Override
+  public List<String> listDanglingVolumes(Duration timeout) {
+    return lines("the dangling volume listing", DockerArgv.volumeLsDangling(runtime), timeout);
+  }
+
+  /**
+   * One volume's labels and creation time. Empty for a volume docker does not have, and a throw for
+   * everything else — {@link #inspect}'s rule, for {@link #inspect}'s reason.
+   */
+  @Override
+  public Optional<VolumeDetail> inspectVolume(String name, Duration timeout) {
+    ContainerProcess.Result result =
+        ContainerProcess.run(
+            null,
+            DockerArgv.volumeInspectDetail(runtime, name),
+            timeout,
+            ContainersTimeouts.SHORT_MAX_CHARS);
+    if (succeeded(result)) {
+      return Optional.of(DockerGcReads.volumeDetail(name, result.output()));
+    }
+    if (result.exitCode() != NO_ANSWER && absent(result.output())) {
+      return Optional.empty();
+    }
+    LOG.warnf("Could not inspect the volume %s: %s", name, brief(result.output()));
+    throw new IllegalStateException(
+        "docker did not answer an inspect of the volume " + name + ": " + brief(result.output()));
+  }
+
+  /** The containers holding a volume. <b>It throws</b>, for {@link #listImageReferencesInUse}'s reason. */
+  @Override
+  public List<String> listContainersUsingVolume(String volumeName, Duration timeout) {
+    ContainerProcess.Result result =
+        ContainerProcess.run(
+            null,
+            DockerArgv.psByVolume(runtime, volumeName),
+            timeout,
+            ContainersTimeouts.LISTING_MAX_CHARS);
+    if (!whole(result)) {
+      LOG.warnf(
+          "Could not read what is using the volume %s: %s", volumeName, brief(result.output()));
+      throw new IllegalStateException(
+          "docker did not answer a container listing for the volume "
+              + volumeName
+              + ": "
+              + brief(result.output()));
+    }
+    return DockerGcReads.linesOf(result.output());
+  }
+
+  @Override
+  public List<String> listBuildxBuilders(Duration timeout) {
+    return lines("the builder listing", DockerArgv.psBuildxBuilders(runtime), timeout);
+  }
+
+  @Override
+  public CacheResult pruneBuildCache(long keepStorageBytes, Duration timeout) {
+    return cache(
+        "prune the host build cache",
+        DockerArgv.builderPrune(runtime, keepStorageBytes),
+        timeout,
+        true);
+  }
+
+  @Override
+  public CacheResult describeBuildCache(Duration timeout) {
+    return cache("read the host build cache", DockerArgv.buildxDu(runtime), timeout, false);
+  }
+
+  @Override
+  public CacheResult pruneBuilderCache(String container, long keepStorageBytes, Duration timeout) {
+    return cache(
+        "prune the build cache of " + container,
+        DockerArgv.buildctlPrune(runtime, container, keepStorageBytes),
+        timeout,
+        true);
+  }
+
+  @Override
+  public CacheResult describeBuilderCache(String container, Duration timeout) {
+    return cache(
+        "read the build cache of " + container,
+        DockerArgv.buildctlDu(runtime, container),
+        timeout,
+        false);
+  }
+
+  /**
+   * One build-cache call, pruning or reading.
+   *
+   * <p>A failure carries docker's own text rather than throwing, because a build cache is a place
+   * where one wedged builder must not take the run with it — the caller reports it per cache. The
+   * summary lines are kept and the per-record lines are dropped; on this host a {@code du} prints
+   * about two thousand of the latter.
+   */
+  private CacheResult cache(String what, List<String> argv, Duration timeout, boolean pruning) {
+    ContainerProcess.Result result =
+        ContainerProcess.run(null, argv, timeout, ContainersTimeouts.PRUNE_MAX_CHARS);
+    if (!succeeded(result)) {
+      LOG.warnf("Could not %s: %s", what, brief(result.output()));
+      return new CacheResult(false, 0, result.output());
+    }
+    long bytes =
+        pruning
+            ? DockerGcReads.reclaimedBytes(result.output())
+            : DockerGcReads.reclaimableBytes(result.output());
+    return new CacheResult(true, bytes, DockerGcReads.cacheSummary(result.output()));
+  }
+
+  /**
+   * A call that answered, in full. <b>Truncation is a failure here and nowhere else</b>: everything
+   * above this section reads one short line or a diagnosis, where a dropped front costs detail,
+   * while a listing with its front dropped is a listing that quietly lost entries.
+   */
+  private static boolean whole(ContainerProcess.Result result) {
+    return succeeded(result) && !result.truncated();
   }
 
   // --- the shapes every call above is one of ------------------------------------------------

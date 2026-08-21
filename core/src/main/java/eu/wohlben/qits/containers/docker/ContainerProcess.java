@@ -15,10 +15,19 @@ import java.util.concurrent.TimeUnit;
  * {@code timedOut=true}.
  *
  * <p><b>What it is used for is the docker CLI and nothing else.</b> The vocabulary is container
- * lifecycle — {@code run}, {@code inspect}, {@code logs}, {@code stop}, {@code rm}, {@code ps},
- * {@code pull}, {@code volume}, {@code network inspect} — and {@code exec} is not in it. Nothing an
- * owner sends becomes a host command line: an argv is assembled element by element by {@link
- * DockerArgv} and handed to {@link ProcessBuilder}, which never re-splits.
+ * lifecycle plus the host's own stores — {@code run}, {@code inspect}, {@code logs}, {@code stop},
+ * {@code rm}, {@code ps}, {@code pull}, {@code volume}, {@code network inspect}, {@code image ls},
+ * {@code image rm}, {@code system df}, {@code builder prune}, {@code buildx du}. Nothing an owner
+ * sends becomes a host command line: an argv is assembled element by element by {@link DockerArgv}
+ * and handed to {@link ProcessBuilder}, which never re-splits.
+ *
+ * <p><b>{@code exec} is in the vocabulary, for exactly one command, and the exception is written
+ * down here rather than discovered later.</b> A bootstrap builder keeps its cache inside its own
+ * container, so pruning it is {@code docker exec buildx_buildkit_<name> buildctl prune} — and both
+ * words of that are constants. The container is a name a {@code ps} filtered on the builder prefix
+ * produced and {@code ContainersIdentifiers.requireBuilderContainer} re-checks; the command is two
+ * literals and a number. No caller may name either, which is what keeps {@code exec} from becoming
+ * a general capability of this service. A second use is a decision, not a refactor.
  *
  * <p><b>There is one entry point and it takes both a timeout and a bound.</b> That is the whole
  * design, and it is the repository's second invariant (AGENTS.md): a docker call with no deadline is

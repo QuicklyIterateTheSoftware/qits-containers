@@ -103,6 +103,66 @@ public class UnwiredContainersDriver implements ContainersDriver {
   }
 
   @Override
+  public DiskUsage diskUsage(Duration timeout) {
+    throw refuse("read the host's disk usage");
+  }
+
+  @Override
+  public List<ImageSummary> listImages(Duration timeout) {
+    throw refuse("list images");
+  }
+
+  @Override
+  public List<String> listImageReferencesInUse(Duration timeout) {
+    throw refuse("list the images containers are using");
+  }
+
+  @Override
+  public OpResult removeImage(String id, Duration timeout) {
+    throw refuse("remove the image " + id);
+  }
+
+  @Override
+  public List<String> listDanglingVolumes(Duration timeout) {
+    throw refuse("list dangling volumes");
+  }
+
+  @Override
+  public Optional<VolumeDetail> inspectVolume(String name, Duration timeout) {
+    throw refuse("inspect the volume " + name);
+  }
+
+  @Override
+  public List<String> listContainersUsingVolume(String volumeName, Duration timeout) {
+    throw refuse("list the containers using the volume " + volumeName);
+  }
+
+  @Override
+  public List<String> listBuildxBuilders(Duration timeout) {
+    throw refuse("list the builder containers");
+  }
+
+  @Override
+  public CacheResult pruneBuildCache(long keepStorageBytes, Duration timeout) {
+    throw refuse("prune the host build cache");
+  }
+
+  @Override
+  public CacheResult describeBuildCache(Duration timeout) {
+    throw refuse("read the host build cache");
+  }
+
+  @Override
+  public CacheResult pruneBuilderCache(String container, long keepStorageBytes, Duration timeout) {
+    throw refuse("prune the build cache of " + container);
+  }
+
+  @Override
+  public CacheResult describeBuilderCache(String container, Duration timeout) {
+    throw refuse("read the build cache of " + container);
+  }
+
+  @Override
   public String selfContainerId() {
     return "";
   }
