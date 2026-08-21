@@ -123,6 +123,11 @@ public class UnwiredContainersDriver implements ContainersDriver {
   }
 
   @Override
+  public OpResult removeImageReferences(List<String> references, Duration timeout) {
+    throw refuse("remove the image references " + references);
+  }
+
+  @Override
   public List<String> listDanglingVolumes(Duration timeout) {
     throw refuse("list dangling volumes");
   }

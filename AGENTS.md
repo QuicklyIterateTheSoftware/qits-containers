@@ -63,7 +63,11 @@ answer empty only when docker really said so, because an empty answer from eithe
 something removable; every other listing may degrade to empty, which costs a run that removes
 nothing. And **the candidate set is always the daemon's own listing**: never `image prune -a`, never
 `rm -f`, never a pattern or a label sweep, because a prune is docker deciding and the whole point is
-that this service decides, one thing at a time, with the rows and the pins in front of it. A
+that this service decides, one thing at a time, with the rows and the pins in front of it. **A
+tagged image is removed by untagging every reference it carries, and only a dangling one by its
+id** — docker refuses an id that more than one reference names, so an id-only removal was 20 of 32
+candidates failed on the first real run, and reaching for `-f` there would be the one flag that
+takes an image a container is holding. A
 dangling volume is under the same rule with three named classes; everything else dangling is kept
 `unmanaged`.
 

@@ -177,8 +177,22 @@ public interface ContainersDriver {
    */
   List<String> listImageReferencesInUse(Duration timeout);
 
-  /** Remove one image by id. Never forced, never a prune — see {@code DockerArgv.imageRm}. */
+  /**
+   * Remove one <b>untagged</b> image by id. Never forced, never a prune — see
+   * {@code DockerArgv.imageRm}.
+   */
   OpResult removeImage(String id, Duration timeout);
+
+  /**
+   * Remove a tagged image by every reference that names it.
+   *
+   * <p><b>Two methods rather than one, because docker has two answers.</b> An id is refused for an
+   * image more than one reference names — including two tags of one repository — so a tagged image
+   * is untagged instead, and the last untag is what removes it. Merging them would mean one belt
+   * loose enough for both a name and an id, which is the belt that lets a tag reach a removal that
+   * only meant to take an id.
+   */
+  OpResult removeImageReferences(List<String> references, Duration timeout);
 
   /** Volumes no container references. Degrades to empty, like every other candidate listing. */
   List<String> listDanglingVolumes(Duration timeout);

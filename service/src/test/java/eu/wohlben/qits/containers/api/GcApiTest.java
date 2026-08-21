@@ -164,7 +164,7 @@ class GcApiTest {
         .body("removed", hasSize(1));
 
     org.junit.jupiter.api.Assertions.assertFalse(
-        driver.calls().stream().anyMatch(call -> call.startsWith("removeImage:")));
+        driver.calls().stream().anyMatch(call -> call.startsWith("removeImage")));
   }
 
   @Test

@@ -358,6 +358,14 @@ public class DockerContainersDriver implements ContainersDriver {
   }
 
   @Override
+  public OpResult removeImageReferences(List<String> references, Duration timeout) {
+    return op(
+        "remove the image " + String.join(" ", references),
+        DockerArgv.imageRmRefs(runtime, references),
+        timeout);
+  }
+
+  @Override
   public List<String> listDanglingVolumes(Duration timeout) {
     return lines("the dangling volume listing", DockerArgv.volumeLsDangling(runtime), timeout);
   }
@@ -411,25 +419,41 @@ public class DockerContainersDriver implements ContainersDriver {
     return lines("the builder listing", DockerArgv.psBuildxBuilders(runtime), timeout);
   }
 
+  /**
+   * The host builder's cache. It is the buildx plugin on CLI 29, so it is made with
+   * {@link DockerArgv#buildxEnvironment()} — the plugin writes state under {@code $DOCKER_CONFIG}
+   * and this service's is read-only.
+   */
   @Override
   public CacheResult pruneBuildCache(long keepStorageBytes, Duration timeout) {
     return cache(
         "prune the host build cache",
         DockerArgv.builderPrune(runtime, keepStorageBytes),
+        DockerArgv.buildxEnvironment(),
         timeout,
         true);
   }
 
   @Override
   public CacheResult describeBuildCache(Duration timeout) {
-    return cache("read the host build cache", DockerArgv.buildxDu(runtime), timeout, false);
+    return cache(
+        "read the host build cache",
+        DockerArgv.buildxDu(runtime),
+        DockerArgv.buildxEnvironment(),
+        timeout,
+        false);
   }
 
+  /**
+   * One builder container's own cache. <b>No buildx environment</b>: this runs {@code buildctl}
+   * inside the builder, where the host's plugin state is nothing at all.
+   */
   @Override
   public CacheResult pruneBuilderCache(String container, long keepStorageBytes, Duration timeout) {
     return cache(
         "prune the build cache of " + container,
         DockerArgv.buildctlPrune(runtime, container, keepStorageBytes),
+        Map.of(),
         timeout,
         true);
   }
@@ -439,6 +463,7 @@ public class DockerContainersDriver implements ContainersDriver {
     return cache(
         "read the build cache of " + container,
         DockerArgv.buildctlDu(runtime, container),
+        Map.of(),
         timeout,
         false);
   }
@@ -450,10 +475,22 @@ public class DockerContainersDriver implements ContainersDriver {
    * where one wedged builder must not take the run with it — the caller reports it per cache. The
    * summary lines are kept and the per-record lines are dropped; on this host a {@code du} prints
    * about two thousand of the latter.
+   *
+   * <p><b>The exit status decides, and nothing that was merely printed does.</b> These are the
+   * calls that talk on stderr while working perfectly: CLI 29 answers every {@code --keep-storage}
+   * with {@code Flag --keep-storage has been deprecated}, and this runner merges stderr into
+   * stdout. Reading a line for a failure would report a working prune as broken, and the deprecated
+   * spelling is the one every docker the platform runs still accepts — so the warning is tolerated
+   * and lands in {@code detail} when there is nothing better to put there.
    */
-  private CacheResult cache(String what, List<String> argv, Duration timeout, boolean pruning) {
+  private CacheResult cache(
+      String what,
+      List<String> argv,
+      Map<String, String> env,
+      Duration timeout,
+      boolean pruning) {
     ContainerProcess.Result result =
-        ContainerProcess.run(null, argv, timeout, ContainersTimeouts.PRUNE_MAX_CHARS);
+        ContainerProcess.run(null, argv, env, timeout, ContainersTimeouts.PRUNE_MAX_CHARS);
     if (!succeeded(result)) {
       LOG.warnf("Could not %s: %s", what, brief(result.output()));
       return new CacheResult(false, 0, result.output());
@@ -462,7 +499,8 @@ public class DockerContainersDriver implements ContainersDriver {
         pruning
             ? DockerGcReads.reclaimedBytes(result.output())
             : DockerGcReads.reclaimableBytes(result.output());
-    return new CacheResult(true, bytes, DockerGcReads.cacheSummary(result.output()));
+    String summary = DockerGcReads.cacheSummary(result.output());
+    return new CacheResult(true, bytes, summary.isEmpty() ? brief(result.output()) : summary);
   }
 
   /**

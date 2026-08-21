@@ -83,6 +83,48 @@ public class DockerGcArgvTest {
   }
 
   @Test
+  public void removesATaggedImageByEveryReferenceThatNamesIt() {
+    // Measured live: `image rm <id>` is refused with `must be forced` for an image more than one
+    // reference names, and two tags of ONE repository are two references. Untagging every one of
+    // them in a single call removes the image on the last, with no -f anywhere.
+    List<String> argv =
+        DockerArgv.imageRmRefs(
+            "docker",
+            List.of(
+                "registry:8080/qits/projects-daemon:2026.820.154053",
+                "registry:8080/qits/projects-daemon:863933e"));
+
+    assertEquals(
+        List.of(
+            "docker",
+            "image",
+            "rm",
+            "registry:8080/qits/projects-daemon:2026.820.154053",
+            "registry:8080/qits/projects-daemon:863933e"),
+        argv);
+    assertFalse(argv.contains("-f"));
+    assertFalse(argv.contains("--force"));
+  }
+
+  @Test
+  public void refusesAReferenceListThatIsEmptyOrCarriesSomethingAnArgvWillNotTake() {
+    assertThrows(IllegalArgumentException.class, () -> DockerArgv.imageRmRefs("docker", List.of()));
+    assertThrows(
+        IllegalArgumentException.class, () -> DockerArgv.imageRmRefs("docker", List.of("--force")));
+    assertThrows(
+        IllegalArgumentException.class,
+        () -> DockerArgv.imageRmRefs("docker", List.of("alpine:3", "a tag with spaces")));
+  }
+
+  @Test
+  public void theHostCacheCallsCarryTheirOwnBuildxState() {
+    // The plugin writes under $DOCKER_CONFIG, which this deployment mounts read-only — measured as
+    // `mkdir /work/config/buildx: permission denied` on the first real collection run.
+    assertEquals(
+        java.util.Map.of("BUILDX_CONFIG", "/tmp/qits-buildx"), DockerArgv.buildxEnvironment());
+  }
+
+  @Test
   public void listsOnlyDanglingVolumes() {
     assertEquals(
         List.of("docker", "volume", "ls", "-q", "--filter", "dangling=true"),

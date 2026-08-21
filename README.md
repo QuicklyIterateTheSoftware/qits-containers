@@ -259,8 +259,13 @@ qits-platform-orchestrator, which reads the pins once per run and hands them to 
 `in-use` (a container was created from it, running or not), `live-row` (a live registry row names
 it), `pinned` (a `keep` entry or a `keepPrefixes` match), `too-young` (built inside `minAge` — which
 is what protects an image a CI step has built and not yet pushed). Everything else goes, dangling
-and tagged alike. Removal is `docker image rm <id>`, one at a time, never forced and never a
-`prune`.
+and tagged alike.
+
+Removal is never forced and never a `prune`, and it takes two shapes because docker has two
+answers: a **dangling** image goes by `docker image rm <id>`, a **tagged** one by
+`docker image rm <every tag it carries>` — an id that more than one reference names is refused with
+`must be forced`, and two tags of one repository are two references. Untagging them all in one call
+removes the image on the last.
 
 **Volumes: only dangling ones are candidates**, and only three classes of them are removed —
 `managed-no-row` (ours, and no row claims it), `buildx-state` (a dead builder's cache store) and

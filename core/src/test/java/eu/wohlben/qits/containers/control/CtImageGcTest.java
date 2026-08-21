@@ -165,6 +165,51 @@ public class CtImageGcTest extends CtTestSupport {
 
     assertEquals(
         Optional.of(ImageGc.UNPINNED), outcome(result.removed(), OLD).map(ImageGc.Outcome::reason));
+    assertTrue(
+        driver.calls().contains("removeImageReferences:registry:8080/qits/qits-ci:beef"),
+        "a tagged image is untagged, never deleted by id");
+  }
+
+  @Test
+  public void anImageWithTwoTagsIsRemovedByBothOfThem() {
+    // The defect the platform's first real collection run found: `image rm <id>` is refused with
+    // `must be forced` for an image more than one reference names, and two tags of ONE repository
+    // count as two. 20 of 32 candidates failed that way. Every reference goes in one call, and the
+    // last untag is what removes the image.
+    driver.scriptImage(
+        OLD,
+        List.of(
+            "registry:8080/qits/projects-daemon:2026.820.154053",
+            "registry:8080/qits/projects-daemon:863933e"),
+        603_000_000L,
+        lastWeek());
+
+    ImageGc.Result result = sweep(false, List.of(), List.of());
+
+    assertEquals(1, result.removed().size());
+    assertTrue(result.failed().isEmpty());
+    assertEquals(603_000_000L, result.bytesReclaimed());
+    assertTrue(
+        driver
+            .calls()
+            .contains(
+                "removeImageReferences:registry:8080/qits/projects-daemon:2026.820.154053,"
+                    + "registry:8080/qits/projects-daemon:863933e"),
+        "both references in one call: " + driver.calls());
+    assertFalse(
+        driver.calls().stream().anyMatch(call -> call.startsWith("removeImage:")),
+        "an id is only ever the argument for a dangling image");
+  }
+
+  @Test
+  public void aDanglingImageIsStillRemovedByItsId() {
+    // The other half of the same rule: an untagged image has no reference to untag, and its id is
+    // the only name it has.
+    driver.scriptImage(DANGLER, List.of(), 90_000_000L, lastWeek());
+
+    sweep(false, List.of(), List.of());
+
+    assertTrue(driver.calls().contains("removeImage:" + DANGLER));
   }
 
   @Test
@@ -180,7 +225,7 @@ public class CtImageGcTest extends CtTestSupport {
     assertEquals(1, result.removed().size());
     assertEquals(90_000_000L, result.bytesReclaimed());
     assertFalse(
-        driver.calls().stream().anyMatch(call -> call.startsWith("removeImage:")),
+        driver.calls().stream().anyMatch(call -> call.startsWith("removeImage")),
         "a dry run decides and asks docker to do nothing");
   }
 
@@ -206,7 +251,7 @@ public class CtImageGcTest extends CtTestSupport {
     assertThrows(IllegalStateException.class, () -> sweep(false, List.of(), List.of()));
 
     assertFalse(
-        driver.calls().stream().anyMatch(call -> call.startsWith("removeImage:")),
+        driver.calls().stream().anyMatch(call -> call.startsWith("removeImage")),
         "an unanswerable in-use listing is what keeps every running container's image");
   }
 
