@@ -137,10 +137,14 @@ public class GcResource {
   @Operation(summary = "Prune the build caches down to a keep-storage")
   @APIResponse(responseCode = "200", description = "The host's cache, then one row per builder")
   @APIResponse(responseCode = "400", description = "A real prune with no keepStorageBytes")
+  // builderKeepStorageBytes is optional and defaults to keepStorageBytes — see the wire record.
   public BuildCacheGcResponse buildCache(BuildCacheGcRequest request) {
-    BuildCacheGcRequest body = request == null ? new BuildCacheGcRequest(null, null) : request;
+    BuildCacheGcRequest body =
+        request == null ? new BuildCacheGcRequest(null, null, null) : request;
     boolean dryRun = dryRun(body.dryRun());
-    BuildCacheGc.Result result = buildCache.sweep(dryRun, keepStorageBytes(body, dryRun));
+    long keepStorage = keepStorageBytes(body, dryRun);
+    BuildCacheGc.Result result =
+        buildCache.sweep(dryRun, keepStorage, builderKeepStorageBytes(body, keepStorage));
     return new BuildCacheGcResponse(
         result.dryRun(),
         new BuildCacheHostDto(
@@ -191,6 +195,22 @@ public class GcResource {
     }
     if (value < 0) {
       throw new IllegalArgumentException("Invalid keepStorageBytes: " + value);
+    }
+    return value;
+  }
+
+  /**
+   * How much a builder container's own cache may keep. Optional, and it falls back to the host's
+   * number rather than to zero — a caller that does not know the two caches are separate must not
+   * be able to empty one of them by leaving a field out.
+   */
+  private static long builderKeepStorageBytes(BuildCacheGcRequest body, long keepStorage) {
+    Long value = body.builderKeepStorageBytes();
+    if (value == null) {
+      return keepStorage;
+    }
+    if (value < 0) {
+      throw new IllegalArgumentException("Invalid builderKeepStorageBytes: " + value);
     }
     return value;
   }

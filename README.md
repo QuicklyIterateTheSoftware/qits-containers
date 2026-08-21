@@ -255,6 +255,10 @@ qits-platform-orchestrator, which reads the pins once per run and hands them to 
     POST /containers/api/gc/volumes         {dryRun, minAge}
     POST /containers/api/gc/build-cache     {dryRun, keepStorageBytes}
 
+The image listing is `docker image ls --all`, which is not a detail: on the containerd image store
+a plain listing prints **no** `<none>` rows at all, so 55 dangling images survived two collection
+runs before anyone noticed.
+
 **Images are kept by four rules, checked in order, and removed only if none of them speaks:**
 `in-use` (a container was created from it, running or not), `live-row` (a live registry row names
 it), `pinned` (a `keep` entry or a `keepPrefixes` match), `too-young` (built inside `minAge` — which
@@ -273,9 +277,15 @@ removes the image on the last.
 this repository's first invariant read for volumes: what this service cannot account for is
 somebody else's.
 
-**Build cache** is pruned down to `keepStorageBytes` on the host builder and inside every
-`buildx_buildkit_*` container. A builder that fails costs itself a row of the answer and never the
-call.
+**Build cache** is pruned down to `keepStorageBytes` on the host builder and to
+`builderKeepStorageBytes` inside every `buildx_buildkit_*` container — the second is optional and
+falls back to the first, and it is there because a bootstrap builder is only useful while a
+bootstrap runs, so the platform keeps it far smaller than its own cache. The host prune is
+`--all`: **keep-storage is the policy, `--all` is the candidate set** — without it a prune only
+considers dangling cache records, which freed 4 GB of a 40 GB cache on the run that found this.
+`--all` offers every record no build is using; how much survives is still the keep-storage, LRU,
+and a record an in-flight build holds is untouchable either way. A builder that fails costs itself
+a row of the answer and never the call.
 
 **No row is written, updated or deleted by any of it.** Two of the four read rows, and only to
 protect something: the image sweep keeps what a live row names, and the volume sweep keeps what a

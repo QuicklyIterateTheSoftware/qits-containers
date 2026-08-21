@@ -34,18 +34,20 @@ public class DockerGcArgvTest {
   }
 
   @Test
-  public void listsImagesWithWholeIdsAndNoIntermediateLayers() {
-    List<String> argv = DockerArgv.imageLs("docker");
+  public void listsEveryImageIncludingTheOnesOnlyDashAllShows() {
+    // Measured on the platform's host — docker 29 with the containerd image store: a plain
+    // `image ls` printed ZERO <none> rows while `-a` printed 62. Without --all, 55 dangling images
+    // (about 12 GB) were invisible to two whole collection runs.
     assertEquals(
         List.of(
             "docker",
             "image",
             "ls",
+            "--all",
             "--no-trunc",
             "--format",
             "{{.ID}}|{{.Repository}}|{{.Tag}}|{{.CreatedAt}}|{{.Size}}"),
-        argv);
-    assertFalse(argv.contains("--all"), "intermediate layers are not images anybody may remove");
+        DockerArgv.imageLs("docker"));
   }
 
   @Test
@@ -167,10 +169,13 @@ public class DockerGcArgvTest {
   }
 
   @Test
-  public void prunesTheHostCacheInBytesAndWithoutAPrompt() {
-    // --keep-storage is docker 29's deprecated alias for --reserved-space and still takes BYTES.
+  public void prunesTheHostCacheInBytesWithoutAPromptAndOverEveryUnusedRecord() {
+    // --all is what makes keep-storage mean anything: without it a prune considers only DANGLING
+    // records, and the second real run freed 4GB of a 40GB cache while du reported 18GB
+    // reclaimable. --keep-storage is docker 29's deprecated alias for --reserved-space and still
+    // takes BYTES.
     assertEquals(
-        List.of("docker", "builder", "prune", "--force", "--keep-storage", "20000000000"),
+        List.of("docker", "builder", "prune", "--all", "--force", "--keep-storage", "20000000000"),
         DockerArgv.builderPrune("docker", 20_000_000_000L));
   }
 

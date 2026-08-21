@@ -426,11 +426,24 @@ public final class DockerArgv {
   /**
    * Every image the host holds, tags folded per id by the reader.
    *
-   * <p>No {@code --all}: intermediate layers are not images anybody may remove, and they are not
-   * what a collection is about. Dangling top-level images are in this listing already.
+   * <p><b>{@code --all}, and it took a live run to learn why.</b> The reasoning this call shipped
+   * with was the classic image store's: a plain {@code image ls} hides intermediate layers and
+   * shows dangling top-level images, so {@code --all} would only add rows nobody may remove. On the
+   * <b>containerd</b> image store that is not true. Measured on the platform's own host, docker 29
+   * with containerd: a plain {@code image ls} printed <b>zero</b> {@code <none>} rows while
+   * {@code -a} printed 62 and {@code -f dangling=true} 55 — so 55 dangling images, about 12 GB,
+   * were invisible to two whole collection runs.
+   *
+   * <p>What {@code --all} can add on a classic store is a layer another image is built on. It has
+   * no tags, so it reaches the candidate set as a dangling image — and docker refuses to remove one
+   * with {@code image has dependent child images}, which lands on the caller's {@code failed} list
+   * where a person can read it. That is the safe direction, and it is why this is not paid for with
+   * an {@code -f}: a parent that really is garbage becomes removable the run after its last child
+   * goes.
    */
   public static List<String> imageLs(String runtimeBinary) {
-    return List.of(runtimeBinary, "image", "ls", "--no-trunc", "--format", IMAGE_FORMAT);
+    return List.of(
+        runtimeBinary, "image", "ls", "--all", "--no-trunc", "--format", IMAGE_FORMAT);
   }
 
   /**
@@ -555,6 +568,13 @@ public final class DockerArgv {
   /**
    * Prune the host builder's cache down to {@code keepStorageBytes}.
    *
+   * <p><b>{@code --all}, because without it a prune only considers DANGLING cache records.</b>
+   * Measured on the platform's second real collection run: the host prune freed 4 GB of a 40 GB
+   * cache while {@code buildx du} reported 18 GB reclaimable. {@code --all} widens the candidate
+   * set to every record no build is using; the keep-storage still decides how much survives, LRU,
+   * and a record an in-flight build holds is untouchable either way. So the flag changes what may
+   * be considered and never what may be taken.
+   *
    * <p><b>{@code --keep-storage} takes BYTES here and megabytes in {@link #buildctlPrune}</b>, which
    * is the one trap in this family. Docker 29.7.2 renamed the flag to {@code --reserved-space} and
    * keeps {@code --keep-storage} as a deprecated alias that still takes bytes — it prints
@@ -566,6 +586,7 @@ public final class DockerArgv {
         runtimeBinary,
         "builder",
         "prune",
+        "--all",
         "--force",
         "--keep-storage",
         String.valueOf(ContainersIdentifiers.requireKeepStorageBytes(keepStorageBytes)));

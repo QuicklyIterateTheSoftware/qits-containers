@@ -30,6 +30,13 @@ import org.jboss.logging.Logger;
  * prune the cache that is actually full, and an exception out of one exec would otherwise take the
  * host's own prune with it when the host prune ran first.
  *
+ * <p><b>The two caches get two numbers.</b> The host's is the platform's build cache and is worth
+ * keeping tens of gigabytes of; a {@code buildx_buildkit_*} container is a bootstrap builder, alive
+ * between bootstraps and useful only during one, so the orchestrator sends it a much smaller
+ * keep-storage. It is one call rather than two because the two caches are one question — how much
+ * disk the build plane may hold — and a caller that had to make two would be a caller that can
+ * forget the second.
+ *
  * <p><b>A dry run reports zero reclaimed, and that is honest rather than unhelpful.</b> A
  * {@code du} says what a cache holds and what of it is reclaimable; it cannot say what a prune down
  * to a particular keep-storage would free, because that depends on which records the daemon picks
@@ -56,13 +63,15 @@ public class BuildCacheGc {
    * One pass.
    *
    * @param dryRun read every cache, prune none
-   * @param keepStorageBytes how much cache each one may keep
+   * @param keepStorageBytes how much the host's cache may keep
+   * @param builderKeepStorageBytes how much a builder container's own cache may keep — usually far
+   *     less, because a bootstrap builder is only needed while a bootstrap is running
    */
-  public Result sweep(boolean dryRun, long keepStorageBytes) {
+  public Result sweep(boolean dryRun, long keepStorageBytes, long builderKeepStorageBytes) {
     Cache host = hostCache(dryRun, keepStorageBytes);
     List<Builder> builders = new ArrayList<>();
     for (String container : driver.listBuildxBuilders(ContainersTimeouts.GC_LIST)) {
-      builders.add(builderCache(container, dryRun, keepStorageBytes));
+      builders.add(builderCache(container, dryRun, builderKeepStorageBytes));
     }
     LOG.infof(
         "Build cache collection%s: host reclaimed %d bytes, %d builder(s)",

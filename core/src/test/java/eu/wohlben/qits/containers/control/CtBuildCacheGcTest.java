@@ -25,6 +25,9 @@ public class CtBuildCacheGcTest extends CtTestSupport {
 
   private static final long KEEP = 20_000_000_000L;
 
+  /** What a bootstrap builder may keep: far less, because it is only useful during a bootstrap. */
+  private static final long BUILDER_KEEP = 1_000_000_000L;
+
   @Inject BuildCacheGc gc;
 
   @Test
@@ -34,7 +37,7 @@ public class CtBuildCacheGcTest extends CtTestSupport {
     driver.scriptBuilderCache(
         BUILDER, new ContainersDriver.CacheResult(true, 27_110_000_000L, "Total: 27.11GB"));
 
-    BuildCacheGc.Result result = gc.sweep(false, KEEP);
+    BuildCacheGc.Result result = gc.sweep(false, KEEP, KEEP);
 
     assertEquals(103_500_000_000L, result.host().reclaimedBytes());
     assertNull(result.host().error());
@@ -55,7 +58,7 @@ public class CtBuildCacheGcTest extends CtTestSupport {
     driver.scriptHostCache(
         new ContainersDriver.CacheResult(true, 302_500_000_000L, "Reclaimable: 302.5GB; Total: 302.5GB"));
 
-    BuildCacheGc.Result result = gc.sweep(true, KEEP);
+    BuildCacheGc.Result result = gc.sweep(true, KEEP, KEEP);
 
     assertTrue(result.dryRun());
     assertEquals(
@@ -77,7 +80,7 @@ public class CtBuildCacheGcTest extends CtTestSupport {
     driver.scriptBuilderCache(
         "buildx_buildkit_other", new ContainersDriver.CacheResult(true, 5_000_000_000L, "Total: 5GB"));
 
-    BuildCacheGc.Result result = gc.sweep(false, KEEP);
+    BuildCacheGc.Result result = gc.sweep(false, KEEP, KEEP);
 
     assertEquals(2, result.builders().size());
     assertNotNull(result.builders().getFirst().error());
@@ -91,7 +94,7 @@ public class CtBuildCacheGcTest extends CtTestSupport {
     driver.scriptBuilders(List.of(BUILDER));
     driver.scriptHostCache(new ContainersDriver.CacheResult(false, 0, "cannot connect to the daemon"));
 
-    BuildCacheGc.Result result = gc.sweep(false, KEEP);
+    BuildCacheGc.Result result = gc.sweep(false, KEEP, KEEP);
 
     assertNotNull(result.host().error());
     assertEquals(0, result.host().reclaimedBytes());
@@ -99,8 +102,24 @@ public class CtBuildCacheGcTest extends CtTestSupport {
   }
 
   @Test
+  public void aBuilderKeepsWhatTheCallerSaidRatherThanWhatTheHostKeeps() {
+    // The two caches are two questions. The host's is the platform's build cache; a builder
+    // container is a bootstrap builder, and the orchestrator keeps it small.
+    driver.scriptBuilders(List.of(BUILDER));
+
+    gc.sweep(false, KEEP, BUILDER_KEEP);
+
+    assertEquals(
+        List.of(
+            "pruneBuildCache:" + KEEP,
+            "listBuildxBuilders",
+            "pruneBuilderCache:" + BUILDER + ":" + BUILDER_KEEP),
+        driver.calls());
+  }
+
+  @Test
   public void aHostWithNoBuilderContainersIsJustTheHostCache() {
-    BuildCacheGc.Result result = gc.sweep(false, KEEP);
+    BuildCacheGc.Result result = gc.sweep(false, KEEP, KEEP);
 
     assertTrue(result.builders().isEmpty());
     assertEquals(List.of("pruneBuildCache:" + KEEP, "listBuildxBuilders"), driver.calls());
