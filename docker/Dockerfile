@@ -133,14 +133,17 @@ WORKDIR /work
 # is in qits-ci's and qits-deployments' Dockerfiles — the two services that shell docker today — and
 # the three should keep matching.
 #
-# `docker-ce-cli` and nothing else: no engine, no compose, no buildx. This service runs containers
-# through a socket a deployment mounts; it builds no image and needs no daemon of its own.
+# `docker-ce-cli` plus `docker-buildx-plugin`, and nothing else: no engine, no compose. This service
+# runs containers through a socket a deployment mounts; it builds no image and needs no daemon of its
+# own. The buildx plugin is here for one reason: on a 29-series CLI `docker builder prune` and
+# `docker buildx du` are the plugin, and the build-cache collection (`/gc/build-cache`) shells both.
+# Without it the host prune answers "unknown command: docker buildx" (measured live 2026-08-21).
 #
 # No git and no ENV HOME. Nothing here clones and nothing reads user.home — checked rather than
 # assumed, and a HOME would read like the user.home workaround qits-ci's header refuses.
 RUN printf '[docker-ce-stable]\nname=Docker CE Stable\nbaseurl=https://download.docker.com/linux/centos/9/$basearch/stable\nenabled=1\ngpgcheck=1\ngpgkey=https://download.docker.com/linux/centos/gpg\n' \
       > /etc/yum.repos.d/docker-ce.repo \
- && microdnf -y --setopt=install_weak_deps=0 --nodocs install docker-ce-cli \
+ && microdnf -y --setopt=install_weak_deps=0 --nodocs install docker-ce-cli docker-buildx-plugin \
  && microdnf -y clean all \
  && rm -f /etc/yum.repos.d/docker-ce.repo
 
