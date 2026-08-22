@@ -42,7 +42,8 @@ public final class ContainersWire {
       String memory,
       String memorySwap,
       Long pidsLimit,
-      String cpus) {}
+      String cpus,
+      Integer oomScoreAdj) {}
 
   /** {@link ContainerSpec} on the wire. */
   public record SpecDto(
@@ -280,7 +281,8 @@ public final class ContainersWire {
                 dto.security().memory(),
                 dto.security().memorySwap(),
                 dto.security().pidsLimit(),
-                dto.security().cpus()),
+                dto.security().cpus(),
+                dto.security().oomScoreAdj()),
         dto.pullPolicy(),
         dto.explicitName(),
         dto.user(),

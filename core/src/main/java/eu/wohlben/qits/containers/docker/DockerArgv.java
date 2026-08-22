@@ -171,6 +171,13 @@ public final class DockerArgv {
       argv.add("--cpus");
       argv.add(security.cpus());
     }
+    // Not a container limit but a host-survival hint: a spawned workload is more expendable than the
+    // platform, so under memory pressure the kernel reaps it first. A reaped workload retries; a
+    // crashed host does not. Consumers set the value (ci highest, then agents, then workspaces).
+    if (security.oomScoreAdj() != null) {
+      argv.add("--oom-score-adj");
+      argv.add(String.valueOf(security.oomScoreAdj()));
+    }
     // EPHEMERAL renders nothing here — see LifecyclePolicy, where the reason is argued.
     if (policy.restartsUnlessStopped()) {
       argv.add("--restart");

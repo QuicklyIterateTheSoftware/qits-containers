@@ -46,7 +46,7 @@ public class SpecReflectionCoverageTest {
         .mount("qits-step-1-work", "/work")
         .shared("qits-maven-repo", "/root/.m2")
         .hostDockerSocket(true)
-        .security(new ContainerSpec.SecurityPosture(true, true, "512m", "512m", 256L, "1.5"))
+        .security(new ContainerSpec.SecurityPosture(true, true, "512m", "512m", 256L, "1.5", 1000))
         .pullPolicy(ContainerSpec.PullPolicy.ALWAYS)
         .name("qits-ci-step-1")
         .user("build")
