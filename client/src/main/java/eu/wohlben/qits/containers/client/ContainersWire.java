@@ -43,11 +43,12 @@ public final class ContainersWire {
       String memory,
       String memorySwap,
       Long pidsLimit,
-      String cpus) {
+      String cpus,
+      Integer oomScoreAdj) {
 
     /** No flags at all — for a workload the platform itself wrote and runs unsandboxed. */
     public static Security none() {
-      return new Security(false, false, null, null, null, null);
+      return new Security(false, false, null, null, null, null, null);
     }
   }
 

@@ -36,7 +36,7 @@ public class DockerArgvTest {
         .mount("qits-ci-run-1", "/work")
         .shared("qits_shared_m2", "/caches/m2")
         .hostDockerSocket(true)
-        .security(new ContainerSpec.SecurityPosture(true, true, "4g", "4g", 2048L, "2"))
+        .security(new ContainerSpec.SecurityPosture(true, true, "4g", "4g", 2048L, "2", 1000))
         .env("QITS_CI_SHA", "cafebabe")
         .env("QITS_CI_DAEMON_ID", "daemon-7")
         .entrypoint("/bin/sh")
@@ -93,6 +93,8 @@ public class DockerArgvTest {
             "2048",
             "--cpus",
             "2",
+            "--oom-score-adj",
+            "1000",
             "-v",
             "qits-ci-run-1:/work",
             "-v",
@@ -234,6 +236,19 @@ public class DockerArgvTest {
         () -> ContainerSpec.builder("img").network("qits-net").user("build:root").build());
     // A bare uid is fine — it is what a passwd-less image is addressed by.
     assertEquals("1001", ContainersIdentifiers.requireUser("1001"));
+  }
+
+  @Test
+  public void aSecurityWithNoOomScoreAdjRendersNoFlagAtAll() {
+    // The absence is the claim: oom-score-adj is a host-survival hint a consumer opts into, and a
+    // value that appeared unasked would move a workload up or down the kernel's kill order it was
+    // never meant to sit in. Null on the wire (an old consumer) has to render nothing.
+    ContainerSpec noOom =
+        ciStep()
+            .security(new ContainerSpec.SecurityPosture(true, true, "4g", "4g", 2048L, "2", null))
+            .build();
+    List<String> argv = render(noOom, LifecyclePolicy.ephemeral(null));
+    assertFalse(argv.contains("--oom-score-adj"), argv.toString());
   }
 
   @Test

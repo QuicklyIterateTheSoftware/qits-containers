@@ -156,7 +156,7 @@ class ContainersClientWireTest {
                     "qits_shared_m2", "/root/.m2")),
                 false,
                 new eu.wohlben.qits.containers.client.ContainersWire.Security(
-                    true, true, "512m", "512m", 128L, "1.5"),
+                    true, true, "512m", "512m", 128L, "1.5", 750),
                 eu.wohlben.qits.containers.client.ContainersWire.PullPolicy.NEVER,
                 "qits-ci-step-run-1-explicit",
                 "build",

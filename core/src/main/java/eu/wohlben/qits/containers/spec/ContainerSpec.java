@@ -110,11 +110,12 @@ public record ContainerSpec(
       String memory,
       String memorySwap,
       Long pidsLimit,
-      String cpus) {
+      String cpus,
+      Integer oomScoreAdj) {
 
     /** No flags at all — for a workload the platform itself wrote and runs unsandboxed. */
     public static SecurityPosture none() {
-      return new SecurityPosture(false, false, null, null, null, null);
+      return new SecurityPosture(false, false, null, null, null, null, null);
     }
   }
 
